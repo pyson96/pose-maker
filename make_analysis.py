@@ -13,7 +13,8 @@
 Keypoints are a flat array in COCO-17 order: [x0, y0, conf0, x1, y1, conf1, ...].
 track_id is ByteTrack's temporary id; global_id is a ReID identity that survives exits and re-entries
 (null until the track's first ReID frame).
-Frames are streamed to disk as they are produced, so memory stays flat.
+Frames are streamed to disk as they are produced, so memory stays flat. The file ends with "people":
+one entry per global_id with its route (ground point once per second), first/last seen and dwell time.
 """
 
 import argparse
@@ -44,6 +45,7 @@ CAMERAS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cameras
 DEFAULT_HANDOFF_TTL = 5.0
 DEFAULT_CROSS_REID_THRESHOLD = 0.70
 TRACK_GRACE_SEC = 1.0        # a track missed for less than this still holds its global_id (detection dropouts)
+PATH_STEP_SEC = 1.0          # one route point per person per second in the "people" summary
 
 
 def default_inputs():
@@ -311,6 +313,45 @@ def ignore_sigint():
     signal.signal(signal.SIGINT, signal.SIG_IGN)  # the Manager outlives Ctrl+C until the workers closed their files
 
 
+def update_route(routes, tid, t, x, y):
+    """Record one sighting of a track at video time t (seconds), ground point (x, y)."""
+    pt = [round(t, 3), round(x, 1), round(y, 1)]
+    rt = routes.get(tid)
+    if rt is None:
+        routes[tid] = {"first": t, "last": t, "dwell": 0.0, "path": [pt], "end": pt}
+        return
+    if t - rt["last"] <= TRACK_GRACE_SEC:  # longer gaps (left the view, lost) are not dwell time
+        rt["dwell"] += t - rt["last"]
+    rt["last"], rt["end"] = t, pt
+    if t - rt["path"][-1][0] >= PATH_STEP_SEC:
+        rt["path"].append(pt)
+
+
+def summarize_people(routes, track_state):
+    """Merge track routes by final global_id -> list of {global_id, track_ids, first/last_seen, dwell, path}.
+
+    Tracks that never got a global_id (gone before their first ReID) are listed on their own.
+    """
+    people = {}
+    for tid, rt in sorted(routes.items(), key=lambda kv: kv[1]["first"]):
+        gid = track_state[tid]["global_id"] if tid in track_state else None
+        p = people.setdefault(gid if gid is not None else "t%d" % tid, {
+            "global_id": gid, "track_ids": [], "first_seen": rt["first"], "last_seen": rt["last"],
+            "dwell_sec": 0.0, "path": []})
+        p["track_ids"].append(tid)
+        p["first_seen"], p["last_seen"] = min(p["first_seen"], rt["first"]), max(p["last_seen"], rt["last"])
+        p["dwell_sec"] += rt["dwell"]
+        p["path"] += rt["path"] + ([rt["end"]] if rt["end"] is not rt["path"][-1] else [])
+    out = []
+    for p in people.values():
+        p["path"].sort(key=lambda q: q[0])
+        p["first_seen"], p["last_seen"] = round(p["first_seen"], 3), round(p["last_seen"], 3)
+        p["span_sec"] = round(p["last_seen"] - p["first_seen"], 3)
+        p["dwell_sec"] = round(p["dwell_sec"], 3)
+        out.append(p)
+    return sorted(out, key=lambda p: p["first_seen"])
+
+
 def persons_of(result, args, track_state):
     boxes = result.boxes
     if boxes is None or len(boxes) == 0:
@@ -373,6 +414,7 @@ def run(order, path, output, args, shared=None):
     track_state = {}   # track_id -> {"global_id", "embedding" (EMA prototype), "in_overlap", "last_seen"}
     gallery = {}       # global_id -> prototype; kept after the track ends so re-entries can match
     local_gid = [0]    # global_id counter when this is the only camera
+    routes = {}        # track_id -> sightings summary for the "people" section (see update_route)
     zones = shared.get("zones") if shared else None
     zone = np.array(zones["camera%d" % order]["polygon"], np.float32) if zones else None
     if zone is not None:
@@ -385,11 +427,12 @@ def run(order, path, output, args, shared=None):
         "coordinate_system": COORDINATE_SYSTEM,
         "camera_id": order,
         "overlap_enabled": zone is not None,
+        "started_at": datetime.now().isoformat(timespec="seconds"),  # wall clock of time 0 (live streams)
     }
     dump = lambda o: json.dumps(o, separators=(",", ":"))
 
     started, idx, written = time.perf_counter(), 0, 0
-    # Header first, then one frame object at a time; "]}" closes it even if interrupted.
+    # Header first, then one frame object at a time; the per-person summary closes it even if interrupted.
     with gzip.open(output, "wt", encoding="utf-8", compresslevel=6) as f:
         f.write(dump(header)[:-1] + ',"frames":[')
         try:
@@ -402,6 +445,9 @@ def run(order, path, output, args, shared=None):
                     break
                 r = model.track(frame, persist=True, tracker=args.tracker, conf=args.conf, classes=[0],
                                 device=args.device, imgsz=args.imgsz, verbose=False, **extra)[0]
+                if r.boxes is not None and r.boxes.id is not None:
+                    for tid, (x1, y1, x2, y2) in zip(r.boxes.id.int().tolist(), r.boxes.xyxy.tolist()):
+                        update_route(routes, tid, idx / fps, (x1 + x2) / 2.0, y2)
                 if idx % args.reid_interval == 0 and r.boxes is not None and r.boxes.id is not None:
                     # Handoff timestamps must be comparable across the two processes: wall clock for live
                     # streams, video time for files (assumes both files start at the same moment).
@@ -492,11 +538,13 @@ def run(order, path, output, args, shared=None):
             cap.release()
             if writer is not None:
                 writer.release()  # finalises the mp4 so it stays playable after Ctrl+C
-            f.write("]}")
+            people = summarize_people(routes, track_state)
+            f.write('],"people":' + dump(people) + "}")
 
     el = time.perf_counter() - started
-    print(tag + "done: %d frames read, %d written, %.1f s (%.1f fps), %s = %.1f MB"
-          % (idx, written, el, idx / max(1e-6, el), output, os.path.getsize(output) / 1048576), flush=True)
+    print(tag + "done: %d frames read, %d written, %d people, %.1f s (%.1f fps), %s = %.1f MB"
+          % (idx, written, sum(p["global_id"] is not None for p in people), el, idx / max(1e-6, el),
+             output, os.path.getsize(output) / 1048576), flush=True)
 
 
 def main():

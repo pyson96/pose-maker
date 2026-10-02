@@ -136,6 +136,8 @@ copy cameras.example.txt cameras.txt     # Linux: cp
 {
   "video": { "width", "height", "fps", "total_frames", "duration_sec", "source" },
   "coordinate_system": { ... },   // 원점 좌상단, 픽셀 단위
+  "camera_id": 1, "overlap_enabled": true,
+  "started_at": "2026-10-02T18:01:00",   // time 0의 실제 시각 (실시간 스트림용)
   "frames": [
     { "frame": 0, "time": 0.0, "persons": [
       { "track_id", "global_id", "bbox": {"x1","y1","x2","y2"}, "det_conf",
@@ -143,6 +145,13 @@ copy cameras.example.txt cameras.txt     # Linux: cp
         "keypoints": [x0, y0, c0, x1, y1, c1, ...],   // COCO-17 순서
         "head": { "origin", "direction", "angle_deg", "source", "fov_deg" } }
     ]}
+  ],
+  "people": [                      // 사람별 요약 (파일을 닫을 때 기록)
+    { "global_id": 2, "track_ids": [1, 4],
+      "first_seen": 0.4, "last_seen": 19.8,   // 처음/마지막으로 보인 시각 (초, frames의 time과 같은 기준)
+      "span_sec": 19.4,                        // last_seen - first_seen
+      "dwell_sec": 17.2,                       // 실제로 화면에 보인 시간의 합
+      "path": [[t, x, y], ...] }               // 동선: 1초마다 발 위치 + 마지막 위치
   ]
 }
 ```
@@ -150,3 +159,7 @@ copy cameras.example.txt cameras.txt     # Linux: cp
 - `track_id`: ByteTrack 임시 ID. 사람이 화면을 나가면 바뀝니다.
 - `global_id`: ReID로 부여한 ID. 다시 들어와도 유지됩니다. 첫 ReID 전에는 `null`입니다.
 - `head`: 코와 귀·눈·어깨 위치로 추정한 머리 방향. 추정할 수 없으면 `null`입니다.
+- `people`: 같은 `global_id`의 track들을 합친 사람별 동선과 체류시간입니다.
+  - `dwell_sec`: 1초 이상 안 보인 구간은 빼고 계산합니다. 화면을 나갔다 다시 들어온 시간은 `span_sec`에는 들어가지만 `dwell_sec`에는 들어가지 않습니다.
+  - 카메라마다 파일이 따로 있으므로, 두 카메라에 걸친 전체 동선은 같은 `global_id`의 두 파일 항목을 합쳐서 보면 됩니다.
+  - 첫 ReID 전에 사라진 짧은 track은 `global_id: null`로 따로 나옵니다.
