@@ -97,6 +97,7 @@ python make_analysis.py --save-video             # 분석 결과를 그린 mp4�
 - 결과는 `1_YYMMDD_HHMM.json.gz`, `2_YYMMDD_HHMM.json.gz` 형식으로 저장됩니다(번호는 입력 순서, 시각은 시작 시각). 같은 날 다시 실행해도 덮어쓰지 않습니다.
 - RTSP는 끝이 없으므로 **Ctrl+C**, `--duration`, `--until`로 종료합니다. 어느 방법이든 json.gz와 mp4는 정상적으로 닫힙니다.
 - RTSP 연결이 끊기면 5초마다 다시 접속을 시도합니다. 종료 시각이 되면 재접속을 멈추고 파일을 닫습니다.
+- `--until`을 준 경우, 시작할 때 카메라가 아직 켜져 있지 않아도 종료 시각까지 계속 접속을 시도합니다.
 
 자주 쓰는 옵션:
 
@@ -127,7 +128,7 @@ copy cameras.example.txt cameras.txt     # Linux: cp
 
 ### 매일 자동 실행 (10:00~19:00)
 
-`run_daily.bat`이 `make_analysis.py --until 19:00`을 실행하고, 로그를 `logs\analysis.log`에 이어 붙입니다. Windows 작업 스케줄러에 등록합니다.
+`run_daily.bat`이 `make_analysis.py --until 19:00`을 실행하고, 로그를 날짜별 파일 `logs\analysis_YYMMDD.log`에 남깁니다. 로그의 모든 줄 앞에는 `[HH:MM:SS]` 시각이 붙습니다. 종료 시각을 바꾸려면 `run_daily.bat 18:30`처럼 인자로 줍니다. Windows 작업 스케줄러에 등록합니다.
 
 ```bat
 schtasks /create /tn PoseMaker /tr "C:\Users\<user>\pose-maker\run_daily.bat" /sc daily /st 10:00 /et 19:15 /k

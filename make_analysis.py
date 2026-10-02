@@ -154,6 +154,11 @@ def l2(v):
     return v / max(float(np.linalg.norm(v)), 1e-12)
 
 
+def log(*parts):
+    """print with a [HH:MM:SS] prefix, flushed at once so a redirected log file is current."""
+    print(time.strftime("[%H:%M:%S]"), *parts, flush=True)
+
+
 def open_capture(path):
     if path.lower().startswith("rtsp://"):
         os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
@@ -170,7 +175,7 @@ def reopen_capture(path, should_stop, tag):
         attempt += 1
         cap = open_capture(path)
         if cap.isOpened():
-            print(tag + "reconnected after %d attempt(s)" % attempt, flush=True)
+            log(tag + "reconnected after %d attempt(s)" % attempt)
             return cap
         cap.release()
     return None
@@ -270,7 +275,7 @@ def setup_overlap_config(paths, out_file):
            "handoff_ttl": DEFAULT_HANDOFF_TTL, "cross_reid_threshold": DEFAULT_CROSS_REID_THRESHOLD}
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
-    print("overlap zones saved -> " + out_file, flush=True)
+    log("overlap zones saved -> " + out_file)
     return cfg
 
 
@@ -412,21 +417,28 @@ def run(order, path, output, args, shared=None):
     tag = "[%d] " % order
     cap = open_capture(path)
     if not cap.isOpened():
-        print(tag + "cannot open video: " + path)
-        return
+        cap.release()
+        cap = None
+        if args.deadline and path.lower().startswith("rtsp://"):
+            # scheduled run: the camera may come up late, keep trying until the stop time
+            log(tag + "cannot open %s -- retrying every %.0f s until %s" % (path, RECONNECT_SEC, args.until))
+            cap = reopen_capture(path, lambda: time.time() >= args.deadline, tag)
+        if cap is None:
+            log(tag + "cannot open video: " + path)
+            return
     w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
     if not 0 < fps <= 240:  # live streams often report 0 or a 90 kHz clock
         fps = 30.0
     total = max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))  # 0 for live streams
     live = total == 0
-    print(tag + "%s: %dx%d @ %.3f fps, %d frames -> %s" % (path, w, h, fps, total, output), flush=True)
+    log(tag + "%s: %dx%d @ %.3f fps, %d frames -> %s" % (path, w, h, fps, total, output))
 
     writer = None
     if args.save_video:
         video_out = os.path.splitext(os.path.splitext(output)[0])[0] + ".mp4"
         writer = cv2.VideoWriter(video_out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
-        print(tag + "annotated video -> " + video_out, flush=True)
+        log(tag + "annotated video -> " + video_out)
 
     model = YOLO(args.model)
     reid = load_reid(args)
@@ -467,17 +479,17 @@ def run(order, path, output, args, shared=None):
         try:
             while True:
                 if should_stop():
-                    print(tag + "stop time reached -- closing file", flush=True)
+                    log(tag + "stop time reached -- closing file")
                     break
                 ok, frame = cap.read()
                 if not ok:
                     if not live:
                         break
-                    print(tag + "stream lost -- reconnecting every %.0f s" % RECONNECT_SEC, flush=True)
+                    log(tag + "stream lost -- reconnecting every %.0f s" % RECONNECT_SEC)
                     cap.release()
                     cap = reopen_capture(path, should_stop, tag)
                     if cap is None:
-                        print(tag + "stop time reached while reconnecting -- closing file", flush=True)
+                        log(tag + "stop time reached while reconnecting -- closing file")
                         break
                     continue
                 now_t = clock()
@@ -565,13 +577,13 @@ def run(order, path, output, args, shared=None):
                 if idx % 1000 == 0:
                     el = time.perf_counter() - started
                     if total:
-                        print(tag + "%d/%d (%.1f%%) %.1f fps, eta %.0f min"
+                        log(tag + "%d/%d (%.1f%%) %.1f fps, eta %.0f min"
                               % (idx, total, 100.0 * idx / total, idx / el,
-                                 (total - idx) / max(1e-6, idx / el) / 60), flush=True)
+                                 (total - idx) / max(1e-6, idx / el) / 60))
                     else:
-                        print(tag + "%d frames, %.1f fps" % (idx, idx / el), flush=True)
+                        log(tag + "%d frames, %.1f fps" % (idx, idx / el))
         except KeyboardInterrupt:
-            print(tag + "interrupted -- closing file")
+            log(tag + "interrupted -- closing file")
         finally:
             if cap is not None:
                 cap.release()
@@ -581,9 +593,9 @@ def run(order, path, output, args, shared=None):
             f.write('],"people":' + dump(people) + "}")
 
     el = time.perf_counter() - started
-    print(tag + "done: %d frames read, %d written, %d people, %.1f s (%.1f fps), %s = %.1f MB"
+    log(tag + "done: %d frames read, %d written, %d people, %.1f s (%.1f fps), %s = %.1f MB"
           % (idx, written, sum(p["global_id"] is not None for p in people), el, idx / max(1e-6, el),
-             output, os.path.getsize(output) / 1048576), flush=True)
+             output, os.path.getsize(output) / 1048576))
 
 
 def main():
@@ -638,12 +650,12 @@ def main():
     if args.overlap_file and len(jobs) == 2:
         zones = load_overlap_config(args.overlap_file)
         if zones is None:
-            print("%s not found -- draw the overlap zone on both cameras" % args.overlap_file, flush=True)
+            log("%s not found -- draw the overlap zone on both cameras" % args.overlap_file)
             zones = setup_overlap_config(args.input, args.overlap_file)
             if zones is None:
-                print("overlap setup cancelled -- running without cross-camera handoff", flush=True)
+                log("overlap setup cancelled -- running without cross-camera handoff")
     elif args.overlap_file and os.path.isfile(args.overlap_file):
-        print("overlap handoff needs exactly two inputs -- ignoring " + args.overlap_file, flush=True)
+        log("overlap handoff needs exactly two inputs -- ignoring " + args.overlap_file)
 
     # Fetch the weights once up front, so concurrent workers don't race to download them.
     from ultralytics import YOLO
@@ -670,7 +682,7 @@ def main():
                 pr.join()
         finally:
             manager.shutdown()
-    print("total wall time: %.1f s" % (time.perf_counter() - started))
+    log("total wall time: %.1f s" % (time.perf_counter() - started))
 
 
 if __name__ == "__main__":
