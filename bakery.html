@@ -1,0 +1,2641 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Bakery CCTV 3D Reconstruction</title>
+<style>
+  :root{ --bg:#14161a; --panel:rgba(20,22,26,.92); --line:#2c3138; --fg:#e6e8ea; --dim:#9aa3ad; --acc:#5aa9ff; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow:hidden}
+  #app{position:fixed;inset:0}
+  canvas{display:block}
+  /* reference overlay sits above the render */
+  #overlayWrap{position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:5}
+  #refImg{position:absolute;left:0;top:0;transform-origin:0 0;opacity:0;image-rendering:auto}
+  #panel{position:fixed;top:0;right:0;width:330px;height:100%;overflow-y:auto;z-index:20;
+    background:var(--panel);border-left:1px solid var(--line);backdrop-filter:blur(6px);padding:10px 12px 60px}
+  #panel.hidden{transform:translateX(100%)}
+  #toggle{position:fixed;top:8px;right:8px;z-index:30;background:#1c2026;color:var(--fg);
+    border:1px solid var(--line);border-radius:5px;padding:5px 9px;cursor:pointer}
+  h3{margin:14px 0 6px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--acc);
+    border-bottom:1px solid var(--line);padding-bottom:4px}
+  h3:first-child{margin-top:0}
+  .row{display:flex;align-items:center;gap:6px;margin:3px 0}
+  .row label{flex:0 0 74px;color:var(--dim)}
+  .row input[type=range]{flex:1;min-width:0;accent-color:var(--acc)}
+  .row input[type=checkbox]{accent-color:var(--acc);margin:0 auto 0 0}
+  select[size]{height:70px;margin:2px 0}
+  .row input[type=number]{width:66px;background:#0f1114;color:var(--fg);border:1px solid var(--line);
+    border-radius:3px;padding:2px 4px;font:inherit}
+  .row .val{width:56px;text-align:right;color:var(--dim)}
+  select,button{background:#1c2026;color:var(--fg);border:1px solid var(--line);border-radius:4px;
+    padding:4px 6px;font:inherit;cursor:pointer}
+  select{width:100%}
+  .btns{display:flex;gap:5px;flex-wrap:wrap;margin:5px 0}
+  .btns button{flex:1 1 auto}
+  button.on{background:var(--acc);color:#07121f;border-color:var(--acc)}
+  .hint{color:var(--dim);font-size:11px;margin:4px 0}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
+  .grid3 input{width:100%;background:#0f1114;color:var(--fg);border:1px solid var(--line);
+    border-radius:3px;padding:2px 3px;font:inherit}
+  .cap{color:var(--dim);font-size:10px;text-align:center}
+  button:disabled{opacity:.45;cursor:default}
+  .row label.chk{flex:0 0 auto;display:flex;align-items:center;color:var(--fg);cursor:pointer}
+  .row label.chk input{margin:0 3px 0 0}
+  #calList{max-height:170px;overflow:auto;border:1px solid var(--line);border-radius:4px;padding:2px;color:var(--dim)}
+  #calList .pr{display:flex;align-items:center;gap:6px;padding:1px 4px;border-radius:3px;cursor:pointer;white-space:nowrap}
+  #calList .pr:hover{background:#1c2026}
+  #calList .pr.sel{background:#243142;color:var(--fg)}
+  #calList .pr.pend{color:#ffe066;cursor:default}
+  #calList .pr .w{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  #calList .pr .e{flex:0 0 48px;text-align:right}
+  #calList .pr .x{padding:0 5px;line-height:14px}
+  #calList .ok{color:#6fdc8c} #calList .mid{color:#f5c451} #calList .bad{color:#ff6b6b}
+  #calMarks{position:fixed;left:0;top:0;width:100%;height:100%;z-index:6;pointer-events:none}
+  #calLoupe{position:fixed;z-index:15;pointer-events:none;width:150px;height:150px;display:none;
+    border:1px solid var(--acc);border-radius:4px;background:#0d0f12;box-shadow:0 2px 12px rgba(0,0,0,.6)}
+  #hud{position:fixed;left:8px;bottom:8px;z-index:20;color:var(--dim);background:rgba(20,22,26,.8);
+    border:1px solid var(--line);border-radius:5px;padding:6px 9px;pointer-events:none;white-space:pre}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="overlayWrap"><img id="refImg" alt=""></div>
+<canvas id="calMarks"></canvas>
+<canvas id="calLoupe" width="150" height="150"></canvas>
+<div id="hud"></div>
+<button id="toggle">panel</button>
+<div id="panel">
+
+  <h3>Reference overlay</h3>
+  <div class="btns">
+    <button id="loadRef">load CCTV image…</button>
+    <button id="fitRef">fit</button>
+  </div>
+  <input type="file" id="refFile" accept="image/*" style="display:none">
+  <div class="row"><label>opacity</label><input type="range" id="ovOpacity" min="0" max="1" step="0.01" value="0"><span class="val" id="ovOpacityV">0.00</span></div>
+  <div class="row"><label>offset X</label><input type="range" id="ovX" min="-1200" max="1200" step="1" value="0"><span class="val" id="ovXV">0</span></div>
+  <div class="row"><label>offset Y</label><input type="range" id="ovY" min="-1200" max="1200" step="1" value="0"><span class="val" id="ovYV">0</span></div>
+  <div class="row"><label>scale X</label><input type="range" id="ovSX" min="0.1" max="3" step="0.001" value="1"><span class="val" id="ovSXV">1.000</span></div>
+  <div class="row"><label>scale Y</label><input type="range" id="ovSY" min="0.1" max="3" step="0.001" value="1"><span class="val" id="ovSYV">1.000</span></div>
+  <div class="row"><label>rotation</label><input type="range" id="ovR" min="-15" max="15" step="0.05" value="0"><span class="val" id="ovRV">0.00</span></div>
+  <div class="hint" id="ovLockAspect">Render viewport is locked to the CCTV aspect 1920:1073, so overlay scale 1.0 = exact fit.</div>
+
+  <h3>Lens (CCTV barrel distortion)</h3>
+  <div class="row"><label>k1</label><input type="range" id="lk1" min="-0.8" max="0.8" step="0.005"><span class="val" id="lk1V"></span></div>
+  <div class="row"><label>k2</label><input type="range" id="lk2" min="-0.4" max="0.4" step="0.005"><span class="val" id="lk2V"></span></div>
+  <div class="btns"><button id="lensOff">disable lens</button></div>
+  <div class="hint">The source frame is a wide CCTV lens: straight walls bow outward. A pinhole camera alone cannot match it, so the render is warped by the same radial model.</div>
+
+  <h3>Camera</h3>
+  <div class="row"><label>pos X</label><input type="range" id="cpx" min="-15" max="15" step="0.01"><span class="val" id="cpxV"></span></div>
+  <div class="row"><label>pos Y</label><input type="range" id="cpy" min="-2" max="10" step="0.01"><span class="val" id="cpyV"></span></div>
+  <div class="row"><label>pos Z</label><input type="range" id="cpz" min="-15" max="15" step="0.01"><span class="val" id="cpzV"></span></div>
+  <div class="row"><label>tgt X</label><input type="range" id="ctx" min="-15" max="15" step="0.01"><span class="val" id="ctxV"></span></div>
+  <div class="row"><label>tgt Y</label><input type="range" id="cty" min="-5" max="8" step="0.01"><span class="val" id="ctyV"></span></div>
+  <div class="row"><label>tgt Z</label><input type="range" id="ctz" min="-15" max="15" step="0.01"><span class="val" id="ctzV"></span></div>
+  <div class="row"><label>fov</label><input type="range" id="cfov" min="25" max="120" step="0.1"><span class="val" id="cfovV"></span></div>
+  <div class="row"><label>roll</label><input type="range" id="croll" min="-15" max="15" step="0.05" value="0"><span class="val" id="crollV">0.00</span></div>
+  <div class="hint">Roll applies while <i>mouse orbit</i> is off (OrbitControls re-derives the orientation each frame).</div>
+  <div class="btns">
+    <button id="camReset">reset to CCTV pose</button>
+    <button id="camFree" class="on">mouse orbit</button>
+  </div>
+  <div class="hint">Mouse: <b>left-drag</b> orbit &middot; <b>right-drag</b> pan &middot; <b>wheel</b> dolly &middot; <b>shift+wheel</b> FOV.<br>
+  Turn <i>mouse orbit</i> off to freeze the camera while editing objects; <i>reset to CCTV pose</i> returns to the calibrated viewpoint.</div>
+
+  <h3>Room</h3>
+  <div class="row"><label>ceiling</label><input type="range" id="rHeight" min="2.0" max="6.0" step="0.01"><span class="val" id="rHeightV"></span></div>
+  <div class="row"><label>width</label><input type="range" id="rWidth" min="3.0" max="12.0" step="0.01"><span class="val" id="rWidthV"></span></div>
+  <div class="row"><label>rear wall</label><input type="range" id="rBackZ" min="-9" max="-1" step="0.01"><span class="val" id="rBackZV"></span></div>
+  <div class="row"><label>back room</label><input type="range" id="rRoomZ" min="-14" max="-2" step="0.01"><span class="val" id="rRoomZV"></span></div>
+  <div class="row"><label>front edge</label><input type="range" id="rFrontZ" min="0" max="8" step="0.01"><span class="val" id="rFrontZV"></span></div>
+  <div class="btns"><button id="rReset">reset room</button><button id="tglCeil" class="on">ceiling</button></div>
+
+  <h3>Saved views</h3>
+  <div class="row"><label>name</label><input type="text" id="viewName" placeholder="e.g. CCTV" style="flex:1;min-width:0;background:#0f1114;color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:3px 5px;font:inherit"></div>
+  <div class="btns"><button id="viewSave">save current view</button></div>
+  <select id="viewList" size="4"></select>
+  <div class="btns"><button id="viewLoad">load</button><button id="viewPin">pin for tracking</button><button id="viewDel">delete</button></div>
+  <div class="hint">A view stores position, target, FOV, roll and lens k1/k2. The <b>pinned</b> view is the one the analysis is unprojected through, so you can orbit freely without moving the reconstruction. <span id="viewPinned">pinned: manifest CCTV pose</span></div>
+  <div class="btns"><button id="viewExport">export views JSON</button><button id="viewImport">import</button></div>
+  <input type="file" id="viewFile" accept="application/json" style="display:none">
+
+  <h3>Photo &harr; 3D calibration</h3>
+  <div class="btns"><button id="calOn">calibrate</button><button id="calV3d">3D</button><button id="calVPhoto">photo</button><button id="calVBlend">blend</button></div>
+  <div class="hint" id="calHint">Load the CCTV photo above, press <b>calibrate</b>, then click the same feature in the 3D scene and in the photo (either order). Box, wall and doorway corners snap. Keys while calibrating: <b>1</b> 3D &middot; <b>2</b> photo &middot; <b>3</b> blend &middot; <b>Esc</b> cancel &middot; <b>Del</b> remove selected &middot; <b>Shift</b>-click for an unsnapped point. Drag a cyan photo marker to fine-tune it.</div>
+  <div class="row"><label>snap</label><label class="chk"><input type="checkbox" id="calSnap" checked>to corners</label></div>
+  <div class="row"><label>also solve</label><label class="chk"><input type="checkbox" id="calFov" checked>fov</label>&nbsp;<label class="chk"><input type="checkbox" id="calK1">k1</label>&nbsp;<label class="chk"><input type="checkbox" id="calK2">k2</label></div>
+  <div id="calList">no pairs yet</div>
+  <div class="cap">error = reprojection error of the current view, in photo pixels</div>
+  <div class="btns"><button id="calSolve">solve camera</button><button id="calRevert" disabled>revert</button><button id="calPin">save + pin</button></div>
+  <div class="btns"><button id="calUndo">remove last</button><button id="calClear">clear all</button></div>
+  <div class="hint" id="calErr">Position and yaw/pitch/roll are always solved. Free k1/k2 only with 8+ pairs spread out to the frame edges - the lens terms need them.</div>
+
+  <h3>Objects</h3>
+  <select id="objSel"></select>
+  <div class="btns">
+    <button id="tMode0" class="on">translate</button><button id="tMode1">rotate</button><button id="tMode2">scale</button>
+    <button id="tOff">off</button>
+  </div>
+  <div class="cap">position X / Y / Z</div>
+  <div class="grid3"><input id="opx" type="number" step="0.01"><input id="opy" type="number" step="0.01"><input id="opz" type="number" step="0.01"></div>
+  <div class="cap">rotation X / Y / Z (deg)</div>
+  <div class="grid3"><input id="orx" type="number" step="0.5"><input id="ory" type="number" step="0.5"><input id="orz" type="number" step="0.5"></div>
+  <div class="cap">scale X / Y / Z</div>
+  <div class="grid3"><input id="osx" type="number" step="0.01"><input id="osy" type="number" step="0.01"><input id="osz" type="number" step="0.01"></div>
+  <div class="cap">width / height / depth (m, rebuilds)</div>
+  <div class="grid3"><input id="odw" type="number" step="0.01"><input id="odh" type="number" step="0.01"><input id="odd" type="number" step="0.01"></div>
+  <div class="btns"><button id="objApply">apply</button><button id="objHide">hide/show</button><button id="objIso">isolate</button></div>
+
+  <h3>Scene</h3>
+  <div class="btns">
+    <button id="tglGrid">grid</button><button id="tglWire">wireframe</button><button id="tglWalls" class="on">walls</button><button id="tglProps" class="on">props</button>
+  </div>
+  <div class="btns"><button id="dumpBtn">dump manifest to console</button></div>
+  <div class="hint">Save the printed JSON back into <code>sceneManifest</code> to persist edits.</div>
+  <div class="btns"><button id="layoutSave">save layout JSON</button><button id="layoutLoad">load layout JSON</button></div>
+  <input type="file" id="layoutFile" accept="application/json,.json" style="display:none">
+  <div class="hint" id="layoutStatus">A layout file holds the <b>pinned</b> camera, the room size and every object's position / rotation / scale / size. Loading it re-pins that camera.</div>
+
+  <h3>Analysis (pose play)</h3>
+  <div class="btns"><button id="anLoad">load tracking JSON…</button><button id="anClear">clear</button></div>
+  <input type="file" id="anFile" accept="application/json,.json,.gz,application/gzip" style="display:none">
+  <div class="row"><label>frame step</label><input type="number" id="anStride" value="1" min="1" max="60" step="1"><span class="val">keep 1/N</span></div>
+  <div class="row"><label>keypoints</label><input type="checkbox" id="anKp" checked><span class="val">skeletons</span></div>
+  <div class="hint" id="anStatus">No file loaded. The export is streamed frame by frame, so a file past the ~512 MB single-string limit still loads. 0907.json (577 MB) is 283k frames / 507k detections and costs roughly 250 MB of heap with skeletons on — raise <i>frame step</i> or untick <i>keypoints</i> to cut that.</div>
+  <div id="anBar" style="height:4px;background:#0f1114;border:1px solid var(--line);border-radius:2px;overflow:hidden;margin:4px 0">
+    <div id="anBarFill" style="height:100%;width:0;background:var(--acc)"></div>
+  </div>
+  <div class="btns">
+    <button id="anPlay">&#9654; play</button><button id="anBack">&#9664;&#9664;</button><button id="anFwd">&#9654;&#9654;</button>
+  </div>
+  <div class="row"><label>time</label><input type="range" id="anSeek" min="0" max="1" step="0.001" value="0"><span class="val" id="anTime">0:00</span></div>
+  <div class="speed-row btns">
+    <button data-speed="0.25">0.25x</button><button data-speed="0.5">0.5x</button>
+    <button data-speed="1" class="on">1x</button><button data-speed="4">4x</button><button data-speed="16">16x</button>
+  </div>
+  <div class="row"><label>person height</label><input type="range" id="anScale" min="1.2" max="2.2" step="0.01" value="1.70"><span class="val" id="anScaleV">1.70</span></div>
+  <div class="btns"><button id="anTrails">trails</button><button id="anGaze">gaze</button><button id="anLabels">ids</button><button id="anNorm">normalize</button></div>
+
+  <h3>Heatmap</h3>
+  <div class="btns">
+    <button id="hmOff" class="on">off</button><button id="hmUniq">unique visitors</button><button id="hmDwell">dwell time</button>
+  </div>
+  <div class="row"><label>cell</label><input type="range" id="hmCell" min="0.05" max="0.60" step="0.01" value="0.15"><span class="val" id="hmCellV">0.15 m</span></div>
+  <div class="row"><label>blur</label><input type="range" id="hmBlur" min="0" max="6" step="1" value="2"><span class="val" id="hmBlurV">2</span></div>
+  <div class="row"><label>opacity</label><input type="range" id="hmOpacity" min="0" max="1" step="0.01" value="0.85"><span class="val" id="hmOpacityV">0.85</span></div>
+  <div class="row"><label>gamma</label><input type="range" id="hmGamma" min="0.2" max="2.0" step="0.02" value="0.60"><span class="val" id="hmGammaV">0.60</span></div>
+  <div class="row"><label>clip max</label><input type="range" id="hmClip" min="0.1" max="1" step="0.01" value="1"><span class="val" id="hmClipV">100%</span></div>
+  <div class="hint" id="hmStatus">Load a tracking JSON first. Every ground point is unprojected through the pinned view onto the floor. <i>Unique visitors</i> counts distinct track ids per cell, so broken tracks over-count until the export carries a re-identified <code>global_id</code>.</div>
+  <canvas id="hmLegend" width="300" height="30" style="width:100%;height:30px;border:1px solid var(--line);border-radius:3px"></canvas>
+
+</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+
+/* =====================================================================
+   SCENE MANIFEST  - derived from the CCTV frame (2021/05/29 10:06:12)
+   Axes: +X = image right, +Y = up, -Z = away from camera (into the shop)
+   Each object position is a BASE-CENTRE anchor (y = floor height);
+   dimensions = [width(x), height(y), depth(z)] in metres.
+   ===================================================================== */
+const sceneManifest = {
+  /* Camera solved by least squares against 12 hand-picked image/world
+     correspondences in the CCTV frame; k1/k2 model the wide CCTV lens. */
+  camera: {
+    position: [ 0.62, 2.75, 1.85],
+    target:   [ 0.42, 0.76, -1.61],
+    fov: 70,
+    roll: 0,
+    k1: 0.07,
+    k2: 0.01
+  },
+  room: {
+    width: 5.91,
+    height: 2.85,
+    backWallZ: -3.71,
+    backRoomZ: -5.48,
+    frontZ: 2.20,
+    doorway: { x: 1.90, width: 0.90, height: 2.00 }
+  },
+  objects: [
+    /* ---------- LEFT SIDE ---------- */
+    { name:'left_refrigerator',  type:'fridge',    position:[-2.603,0.000,-0.778], rotation:[0,0.10,0],  dimensions:[0.72,1.90,0.70], color:0x15181c, accent:0xc4202c },
+    { name:'left_display_case',  type:'glassCase', position:[-2.603,0.000,-1.704], rotation:[0,0.05,0],  dimensions:[0.60,1.85,0.60], color:0xdfe3e6, shelves:4, lit:true },
+    { name:'front_left_bins',    type:'crateBin',  position:[-2.392,0.000,0.185], rotation:[0,0.20,0],  dimensions:[0.95,0.70,0.90], color:0xb08a5c },
+    { name:'left_wall_shelf',    type:'wallShelf', position:[-2.786,1.580,-2.594], rotation:[0,0,0],  dimensions:[0.28,0.92,1.60], color:0x3a2c22, shelves:3 },
+    { name:'left_ac_unit',       type:'box',       position:[-2.814,2.020,-0.519], rotation:[0,0,0],  dimensions:[0.24,0.42,0.85], color:0xeceae4 },
+
+    /* ---------- COUNTER ZONE (back-left) ---------- */
+    { name:'counter_main',       type:'counter',   position:[-1.055,0.000,-2.890], rotation:[0,-0.07,0], dimensions:[2.50,1.05,0.70], color:0xf2efe8 },
+    { name:'counter_dark_base',  type:'box',       position:[1.097,0.000,-2.964], rotation:[0,-0.07,0], dimensions:[0.70,1.05,0.70], color:0x1e2530 },
+    { name:'counter_pastry_case',type:'glassCase', position:[-1.618,1.050,-2.979], rotation:[0,-0.07,0], dimensions:[1.00,0.50,0.50], color:0xdfe3e6, shelves:2 },
+    { name:'counter_bread_tray', type:'breadTray', position:[-1.055,1.050,-2.757], rotation:[0,-0.07,0], dimensions:[1.40,0.10,0.42], color:0xc98f4e },
+    { name:'espresso_machine',   type:'box',       position:[-2.462,1.050,-3.038], rotation:[0,-0.07,0], dimensions:[0.40,0.40,0.45], color:0x2b2f33 },
+    { name:'register',           type:'box',       position:[0.450,1.050,-3.038], rotation:[0,-0.07,0], dimensions:[0.34,0.32,0.28], color:0xdad6cc },
+    { name:'back_bar',           type:'wallShelf', position:[-1.407,0.000,-3.601], rotation:[0,0,0],    dimensions:[2.00,1.90,0.30], color:0x4a3a2c, shelves:4, vertical:true },
+    { name:'sanitizer_stand',    type:'box',       position:[1.126,0.000,-3.297], rotation:[0,0,0],      dimensions:[0.28,0.95,0.28], color:0xf0f0ee },
+
+    /* ---------- CENTRE ISLAND (wooden crate displays) ---------- */
+    { name:'center_display_01',  type:'crateStack',position:[-1.477,0.000,-2.186], rotation:[0,-0.05,0],  dimensions:[1.00,0.90,0.90], color:0xb99165 },
+    { name:'center_display_02',  type:'crateStack',position:[-0.352,0.000,-2.334], rotation:[0,-0.05,0],  dimensions:[0.90,0.90,0.80], color:0xb99165 },
+    { name:'white_pkg_shelf',    type:'wallShelf', position:[0.492,0.000,-2.668], rotation:[0,-0.07,0],  dimensions:[0.70,1.10,0.40], color:0xe9e6de, shelves:3, vertical:true },
+
+    /* ---------- RIGHT-CENTRE DISPLAY CHAIN (far -> near) ---------- */
+    { name:'rack_bagged_tall',   type:'bagRack',   position:[1.379,0.000,-2.482], rotation:[0,-0.06,0],  dimensions:[0.75,1.30,0.55], color:0xd8d4c8 },
+    { name:'center_display_03',  type:'crateStack',position:[1.759,0.000,-2.112], rotation:[0,-0.04,0],  dimensions:[0.80,0.85,0.80], color:0xbb9468 },
+    { name:'center_display_04',  type:'crateStack',position:[1.013,0.000,-1.741], rotation:[0, 0.03,0],  dimensions:[0.75,0.90,0.75], color:0xbb9468 },
+    { name:'center_display_05',  type:'crateStack',position:[1.055,0.000,-1.223], rotation:[0, 0.02,0],  dimensions:[0.80,0.85,0.80], color:0xc09a6e },
+    { name:'center_display_06',  type:'crateStack',position:[1.154,0.000,-0.704], rotation:[0, 0.02,0],  dimensions:[0.85,0.78,0.85], color:0xc09a6e },
+    { name:'center_display_07',  type:'crateStack',position:[1.154,0.000,-0.148], rotation:[0, 0.01,0],  dimensions:[0.90,0.72,0.90], color:0xc5a074 },
+    { name:'center_display_08',  type:'crateStack',position:[1.196,0.000,0.445], rotation:[0, 0.01,0],  dimensions:[0.95,0.62,0.95], color:0xc5a074 },
+
+    /* ---------- RIGHT WALL ---------- */
+    { name:'right_shelf',        type:'wallShelf', position:[2.603,0.000,-2.631], rotation:[0,-0.05,0],  dimensions:[0.40,1.65,1.30], color:0xdcdbd4, shelves:4 },
+    { name:'right_dresser',      type:'box',       position:[2.617,0.000,-1.853], rotation:[0,-0.03,0],  dimensions:[0.42,0.90,1.00], color:0xdedcd3 },
+    { name:'right_basket_table', type:'table',     position:[2.504,0.000,-1.223], rotation:[0,-0.03,0],  dimensions:[0.50,0.78,0.90], color:0xa9855c },
+    { name:'right_wall_box',     type:'box',       position:[2.744,1.250,-0.963], rotation:[0,0,0],   dimensions:[0.30,0.32,0.60], color:0x5a4632 },
+    { name:'right_glass_cabinet',type:'glassCase', position:[2.575,0.000,-0.408], rotation:[0,-0.03,0],  dimensions:[0.45,1.90,0.85], color:0x6b4a2e, shelves:4, dark:true },
+    { name:'right_window',       type:'window',    position:[2.927,0.500,0.778], rotation:[0,0,0],   dimensions:[0.06,1.60,1.90], color:0xf3f1ea },
+
+    /* ---------- REAR DOORWAY / BACK ROOM ---------- */
+    { name:'backroom_table',     type:'table',     position:[1.899,0.000,-4.668], rotation:[0,0,0],      dimensions:[1.10,0.88,0.70], color:0x8a6a48 },
+    { name:'backroom_stool_a',   type:'box',       position:[1.477,0.000,-4.298], rotation:[0,0,0],      dimensions:[0.30,0.66,0.30], color:0x6e553a },
+    { name:'backroom_stool_b',   type:'box',       position:[2.181,0.000,-4.261], rotation:[0,0,0],      dimensions:[0.30,0.66,0.30], color:0x6e553a },
+
+    /* ---------- FLAT DETAIL ---------- */
+    { name:'floor_arrow_left',   type:'floorTape', position:[-0.281,0.004,-0.593], rotation:[0,0.35,0], dimensions:[0.40,0.01,0.52], color:0x4c8fb5 },
+    { name:'floor_arrow_right',  type:'floorTape', position:[2.111,0.004,-0.445], rotation:[0,-0.30,0],dimensions:[0.38,0.01,0.50], color:0x4c8fb5 },
+    { name:'chalkboard',         type:'panel',     position:[-1.407,1.720,-3.675], rotation:[0,0,0],    dimensions:[1.80,0.75,0.04], color:0x27362f },
+
+    /* ---------- STAFF (visible behind the counter) ---------- */
+    { name:'staff_01',           type:'person',    position:[-1.266,0.000,-3.334], rotation:[0,0.10,0],   dimensions:[0.46,1.60,0.30], color:0xf4f4f2 },
+    { name:'staff_02',           type:'person',    position:[-0.704,0.000,-3.498], rotation:[0,0.05,0],   dimensions:[0.46,1.66,0.30], color:0x2c2c30 }
+  ]
+};
+
+/* ============================ RENDERER / SCENE ============================ */
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0f12);
+
+const camera = new THREE.PerspectiveCamera(sceneManifest.camera.fov, 1, 0.05, 120);
+function applyManifestCamera(){
+  const c = sceneManifest.camera;
+  camera.position.fromArray(c.position);
+  camera.fov = c.fov;
+  controls.target.fromArray(c.target);
+  camera.up.set(0,1,0);
+  camera.lookAt(controls.target);
+  applyRoll(c.roll || 0);
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+function applyRoll(deg){
+  camera.rotateZ(THREE.MathUtils.degToRad(deg));
+}
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.screenSpacePanning = true;
+controls.maxPolarAngle = Math.PI * 0.495;   // stay above the floor
+controls.minDistance = 0.4;
+controls.maxDistance = 40;
+controls.enabled = true;               // mouse-driven camera, as in index.html
+let orbitWanted = true;                // remembered across gizmo drags
+
+/* ============================ MATERIALS ============================ */
+const M = {
+  floor:  new THREE.MeshStandardMaterial({ color:0xb08a5e, roughness:0.72, metalness:0.02 }),
+  wall:   new THREE.MeshStandardMaterial({ color:0xe9e5db, roughness:0.95, side:THREE.DoubleSide }),
+  wallDark:new THREE.MeshStandardMaterial({ color:0x3b3129, roughness:0.9,  side:THREE.DoubleSide }),
+  ceil:   new THREE.MeshStandardMaterial({ color:0xf2efe8, roughness:1.0, side:THREE.DoubleSide }),
+  glass:  new THREE.MeshPhysicalMaterial({ color:0xcfe0e6, transparent:true, opacity:0.20,
+             roughness:0.08, metalness:0.0, transmission:0.0, side:THREE.DoubleSide })
+};
+function mat(hex, rough){ return new THREE.MeshStandardMaterial({ color:hex, roughness: rough===undefined?0.78:rough }); }
+
+/* ============================ PRIMITIVE HELPERS ============================ */
+function box(w,h,d,material,x,y,z){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), material);
+  m.position.set(x,y,z); m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+/* deterministic pseudo-random so the scene never reshuffles between reloads */
+let seedState = 20210529;
+function rnd(){ seedState = (seedState*1664525 + 1013904223) % 4294967296; return seedState/4294967296; }
+
+/* ---- builders: every one returns a Group whose origin is the base centre ---- */
+const builders = {};
+
+builders.box = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  g.add(box(w,h,d, mat(o.color), 0, h/2, 0));
+  return g;
+};
+
+builders.panel = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  g.add(box(w,h,d, mat(o.color,0.95), 0, h/2, 0));
+  g.add(box(w+0.06,h+0.06,d*0.5, mat(0x6b5238,0.9), 0, h/2, -d*0.6));
+  return g;
+};
+
+builders.floorTape = (o) => {
+  const [w,,d] = o.dimensions; const g = new THREE.Group();
+  const m = mat(o.color,0.9);
+  const shaft = box(w*0.45, 0.006, d*0.62, m, 0, 0, d*0.14); g.add(shaft);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(w*0.55, d*0.38, 3), m);
+  head.rotation.x = -Math.PI/2; head.rotation.z = Math.PI;
+  head.position.set(0, 0, -d*0.36); g.add(head);
+  return g;
+};
+
+builders.counter = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  const body = mat(o.color, 0.7);
+  g.add(box(w, h-0.06, d, body, 0, (h-0.06)/2, 0));               // carcass
+  g.add(box(w+0.06, 0.06, d+0.05, mat(0xfbf8f1,0.55), 0, h-0.03, 0)); // worktop
+  // open shelving on the customer side, holding bread trays
+  const shelfMat = mat(0xe4dfd2,0.8);
+  for (let i=0;i<2;i++){
+    const y = 0.30 + i*0.34;
+    g.add(box(w*0.62, 0.035, d*0.8, shelfMat, -w*0.08, y, d*0.06));
+    for (let k=0;k<5;k++){
+      const bw = w*0.62/6;
+      g.add(box(bw*0.8, 0.09, d*0.5, mat(0xd2a05e,0.85),
+        -w*0.08 - w*0.62/2 + bw*(k+0.8), y+0.06, d*0.06));
+    }
+  }
+  return g;
+};
+
+builders.breadTray = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  g.add(box(w, 0.03, d, mat(0xcfc7b4,0.85), 0, 0.015, 0));
+  const n = Math.max(3, Math.round(w/0.26));
+  for (let i=0;i<n;i++){
+    for (let j=0;j<2;j++){
+      const bx = -w/2 + w*(i+0.5)/n;
+      const bz = -d/4 + j*d/2;
+      const s = 0.10 + rnd()*0.05;
+      const b = new THREE.Mesh(new THREE.SphereGeometry(s, 10, 8), mat(o.color, 0.85));
+      b.scale.set(1.0, 0.55, 0.75); b.position.set(bx, 0.03+s*0.5, bz);
+      b.castShadow = true; g.add(b);
+    }
+  }
+  return g;
+};
+
+builders.fridge = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  g.add(box(w, h, d, mat(o.color, 0.5), 0, h/2, 0));
+  // glass door with cold interior light
+  const door = new THREE.Mesh(new THREE.BoxGeometry(w*0.82, h*0.52, 0.03), M.glass);
+  door.position.set(0, h*0.66, d/2+0.01); g.add(door);
+  const glow = new THREE.Mesh(new THREE.BoxGeometry(w*0.78, h*0.48, 0.02), 
+    new THREE.MeshBasicMaterial({ color:0x9fd8ff }));
+  glow.position.set(0, h*0.66, d/2-0.02); g.add(glow);
+  // red branding band down the lower front
+  g.add(box(w*0.9, h*0.34, 0.02, mat(o.accent||0xc4202c, 0.6), 0, h*0.22, d/2+0.005));
+  return g;
+};
+
+builders.glassCase = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  const frameMat = mat(o.color, o.dark?0.7:0.5);
+  const t = 0.045;
+  g.add(box(w, t, d, frameMat, 0, t/2, 0));                    // base
+  g.add(box(w, t, d, frameMat, 0, h-t/2, 0));                  // top
+  for (const sx of [-1,1]) g.add(box(t, h, d, frameMat, sx*(w/2-t/2), h/2, 0));
+  for (const sz of [-1,1]) g.add(box(w, h, t, frameMat, 0, h/2, sz*(d/2-t/2)));
+  const glass = new THREE.Mesh(new THREE.BoxGeometry(w-t*2, h-t*2, d-t*2), M.glass);
+  glass.position.y = h/2; g.add(glass);
+  const n = o.shelves || 3;
+  for (let i=1;i<=n;i++){
+    const y = h*i/(n+1);
+    g.add(box(w-t*2.4, 0.02, d-t*2.4, mat(0xd8d8d6,0.4), 0, y, 0));
+    const cols = Math.max(2, Math.round(w/0.22));
+    for (let c=0;c<cols;c++){
+      const it = box(w/cols*0.6, 0.14, d*0.5, mat(0xd9c39a,0.85),
+        -w/2 + w*(c+0.5)/cols, y+0.08, 0);
+      g.add(it);
+    }
+  }
+  if (o.lit){
+    const l = new THREE.PointLight(0xbfe4ff, 3.5, 3.0, 2);
+    l.position.set(0, h*0.8, d*0.2); g.add(l);
+  }
+  return g;
+};
+
+/* wooden crate stack: low display island with bread laid on top */
+builders.crateStack = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  const woodA = mat(o.color, 0.85), woodB = mat(0x9c7748, 0.85);
+  const tiers = 2, tierH = (h-0.10)/tiers;
+  for (let t=0;t<tiers;t++){
+    const y0 = t*tierH, inset = t*0.04;
+    const cw = w-inset*2, cd = d-inset*2;
+    const m = t%2 ? woodB : woodA;
+    for (const sz of [-1,1]) g.add(box(cw, tierH, 0.035, m, 0, y0+tierH/2, sz*(cd/2)));
+    for (const sx of [-1,1]) g.add(box(0.035, tierH, cd, m, sx*(cw/2), y0+tierH/2, 0));
+    g.add(box(cw, 0.03, cd, m, 0, y0+0.015, 0));
+  }
+  // goods on the top surface
+  const topY = tiers*tierH;
+  g.add(box(w*0.94, 0.03, d*0.94, mat(0xcfc7b4,0.85), 0, topY+0.015, 0));
+  const nx = Math.max(2, Math.round(w/0.24)), nz = Math.max(2, Math.round(d/0.24));
+  for (let i=0;i<nx;i++) for (let j=0;j<nz;j++){
+    const s = 0.075 + rnd()*0.045;
+    const b = new THREE.Mesh(new THREE.SphereGeometry(s, 8, 6), mat(0xd39a55 + Math.floor(rnd()*0x0a0a0a), 0.85));
+    b.scale.set(1.0, 0.6, 0.8);
+    b.position.set(-w*0.42 + w*0.84*(i+0.5)/nx, topY+0.03+s*0.55, -d*0.42 + d*0.84*(j+0.5)/nz);
+    b.rotation.y = rnd()*3.14; b.castShadow = true; g.add(b);
+  }
+  return g;
+};
+
+/* open bins of paper-wrapped goods (front-left foreground) */
+builders.crateBin = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  const wood = mat(o.color, 0.85);
+  const half = w/2;
+  for (let s=0;s<2;s++){
+    const cx = -w/4 + s*w/2;
+    for (const sz of [-1,1]) g.add(box(half*0.92, h, 0.03, wood, cx, h/2, sz*(d/2)));
+    for (const sx of [-1,1]) g.add(box(0.03, h, d, wood, cx+sx*half*0.46, h/2, 0));
+    g.add(box(half*0.92, 0.03, d, wood, cx, 0.015, 0));
+    for (let k=0;k<4;k++){
+      const p = box(half*0.7, 0.30, 0.05, mat(0xd8cbb0,0.9), cx, h*0.75, -d/2+0.12+k*0.12);
+      p.rotation.x = -0.25; g.add(p);
+    }
+  }
+  return g;
+};
+
+/* wallShelf: open shelving. `vertical:true` = free-standing rack (depth is the
+   short axis); otherwise the long axis runs along Z, hugging a side wall.      */
+builders.wallShelf = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  const m = mat(o.color, 0.82);
+  const n = o.shelves || 3;
+  const long = o.vertical ? w : Math.max(w, d);
+  const alongZ = !o.vertical && d > w;
+  const sw = alongZ ? w : long, sd = alongZ ? d : d;
+  for (let i=0;i<=n;i++){
+    const y = 0.06 + (h-0.10)*i/n;
+    g.add(box(sw, 0.03, sd, m, 0, y, 0));
+  }
+  const px = alongZ ? sw : sw;
+  for (const s of [-1,1]){
+    if (alongZ) g.add(box(0.04, h, 0.06, m, 0, h/2, s*(sd/2)));
+    else        g.add(box(0.04, h, sd, m, s*(px/2), h/2, 0));
+  }
+  g.add(box(alongZ?0.03:sw, h, alongZ?sd:0.03, m, alongZ?-sw/2:0, h/2, alongZ?0:-sd/2));
+  // stock: small boxes/plates on each shelf
+  for (let i=0;i<n;i++){
+    const y = 0.06 + (h-0.10)*i/n;
+    const cols = Math.max(2, Math.round((alongZ?sd:sw)/0.22));
+    for (let c=0;c<cols;c++){
+      const t = -((alongZ?sd:sw)/2) + (alongZ?sd:sw)*(c+0.5)/cols;
+      const it = box(alongZ?sw*0.6:sw/cols*0.65, 0.13+rnd()*0.06, alongZ?sd/cols*0.6:sd*0.6,
+        mat(0xcbc4b4 + Math.floor(rnd()*0x0c0c0c), 0.85),
+        alongZ?0:t, y+0.09, alongZ?t:0);
+      g.add(it);
+    }
+  }
+  return g;
+};
+
+/* tall rack of hanging bagged loaves */
+builders.bagRack = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  const frame = mat(0xcfcdc6, 0.6);
+  g.add(box(w, 0.03, d, frame, 0, h*0.30, 0));
+  g.add(box(w, 0.03, d, frame, 0, 0.06, 0));
+  for (const sx of [-1,1]) for (const sz of [-1,1])
+    g.add(box(0.03, h*0.32, 0.03, frame, sx*(w/2-0.02), h*0.16, sz*(d/2-0.02)));
+  const nx = Math.max(3, Math.round(w/0.16)), nz = Math.max(2, Math.round(d/0.18));
+  for (let i=0;i<nx;i++) for (let j=0;j<nz;j++){
+    const bagH = 0.55 + rnd()*0.25;
+    const b = box(w/nx*0.7, bagH, d/nz*0.55, mat(0xe7e2d4, 0.55),
+      -w/2 + w*(i+0.5)/nx, h*0.31 + bagH/2, -d/2 + d*(j+0.5)/nz);
+    b.rotation.z = (rnd()-0.5)*0.08; g.add(b);
+  }
+  return g;
+};
+
+builders.table = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  const m = mat(o.color, 0.8);
+  g.add(box(w, 0.05, d, m, 0, h-0.025, 0));
+  for (const sx of [-1,1]) for (const sz of [-1,1])
+    g.add(box(0.06, h-0.05, 0.06, m, sx*(w/2-0.05), (h-0.05)/2, sz*(d/2-0.05)));
+  g.add(box(w*0.7, 0.16, d*0.6, mat(0xc9a870,0.9), 0, h+0.08, 0));
+  return g;
+};
+
+builders.window = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  g.add(box(w, h, d, new THREE.MeshBasicMaterial({ color:0xdfeaf2 }), 0, h/2, 0));
+  g.add(box(w*1.6, h*1.05, d*0.12, mat(o.color,0.95), 0.04, h/2, 0));
+  const pl = new THREE.PointLight(0xdfeefc, 6, 6, 2);
+  pl.position.set(-0.4, h*0.7, 0); g.add(pl);
+  return g;
+};
+
+builders.person = (o) => {
+  const [w,h,d] = o.dimensions; const g = new THREE.Group();
+  const body = mat(o.color, 0.85);
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(w*0.42, h*0.36, 4, 10), body);
+  torso.position.y = h*0.66; torso.castShadow = true; g.add(torso);
+  g.add(box(w*0.55, h*0.42, d*0.9, mat(0x33363b,0.9), 0, h*0.21, 0));
+  const head = new THREE.Mesh(new THREE.SphereGeometry(h*0.075, 14, 12), mat(0xd9b294,0.85));
+  head.position.y = h*0.95; g.add(head);
+  const mask = box(h*0.10, h*0.055, 0.03, mat(0xf6f6f6,0.9), 0, h*0.935, h*0.070);
+  g.add(mask);
+  return g;
+};
+
+/* ============================ ROOM SHELL ============================ */
+const R = sceneManifest.room;
+const roomGroup = new THREE.Group(); roomGroup.name = 'walls'; scene.add(roomGroup);
+const floorGroup = new THREE.Group(); floorGroup.name = 'floor'; scene.add(floorGroup);
+let floorZ0 = R.backRoomZ, floorZ1 = R.frontZ;
+
+function clearGroup(g){
+  for (let i=g.children.length-1; i>=0; i--){
+    const c = g.children[i];
+    c.traverse(o => { if (o.isMesh) o.geometry.dispose(); });
+    g.remove(c);
+  }
+}
+function wall(w,h,mtl,pos,roty){
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w,h), mtl);
+  m.position.set(pos[0],pos[1],pos[2]); m.rotation.y = roty||0;
+  m.receiveShadow = true; roomGroup.add(m); return m;
+}
+
+/* Rebuilt whenever a room dimension changes, so ceiling height is live. */
+function buildRoom(){
+  clearGroup(roomGroup); clearGroup(floorGroup);
+  floorZ0 = R.backRoomZ; floorZ1 = R.frontZ;
+  const fw = R.width, fd = floorZ1 - floorZ0, cz = (floorZ0+floorZ1)/2;
+
+  const f = new THREE.Mesh(new THREE.PlaneGeometry(fw, fd), M.floor);
+  f.rotation.x = -Math.PI/2; f.position.set(0, 0, cz);
+  f.receiveShadow = true; f.name = 'floorPlane'; floorGroup.add(f);
+  // plank seams running front-to-back, as in the reference frame
+  const seam = new THREE.MeshBasicMaterial({ color:0x8a6b45 });
+  for (let x=-fw/2+0.16; x<fw/2; x+=0.16){
+    const s = new THREE.Mesh(new THREE.PlaneGeometry(0.012, fd), seam);
+    s.rotation.x = -Math.PI/2; s.position.set(x, 0.002, cz);
+    floorGroup.add(s);
+  }
+  // side walls
+  wall(fd, R.height, M.wall, [-fw/2, R.height/2, cz],  Math.PI/2);
+  wall(fd, R.height, M.wall, [ fw/2, R.height/2, cz], -Math.PI/2);
+  // back wall of the back room
+  wall(fw, R.height, M.wall, [0, R.height/2, R.backRoomZ], 0);
+  // shop rear wall with the doorway cut out (built from four panels)
+  const D = R.doorway, z = R.backWallZ;
+  const leftW = (D.x - D.width/2) + fw/2;
+  const rightW = fw/2 - (D.x + D.width/2);
+  if (leftW  > 0.01) wall(leftW,  R.height, M.wallDark, [-fw/2 + leftW/2, R.height/2, z], 0);
+  if (rightW > 0.01) wall(rightW, R.height, M.wall,     [ fw/2 - rightW/2, R.height/2, z], 0);
+  if (R.height > D.height)
+    wall(D.width, R.height - D.height, M.wall, [D.x, D.height + (R.height-D.height)/2, z], 0);
+  const fm = mat(0x7a5a3c, 0.8);
+  roomGroup.add(box(0.07, D.height, 0.14, fm, D.x - D.width/2, D.height/2, z));
+  roomGroup.add(box(0.07, D.height, 0.14, fm, D.x + D.width/2, D.height/2, z));
+  roomGroup.add(box(D.width+0.14, 0.09, 0.14, fm, D.x, D.height, z));
+  // ceiling
+  const c = new THREE.Mesh(new THREE.PlaneGeometry(fw, fd), M.ceil);
+  c.rotation.x = Math.PI/2; c.position.set(0, R.height, cz);
+  c.name = 'ceilingPlane'; roomGroup.add(c);
+
+  placeCeilingLights();
+}
+
+/* ============================ OBJECT ASSEMBLY ============================ */
+const propsGroup = new THREE.Group(); propsGroup.name = 'props'; scene.add(propsGroup);
+const objectsByName = new Map();
+
+function buildObject(def){
+  const b = builders[def.type] || builders.box;
+  const g = b(def);
+  g.name = def.name;
+  g.userData.def = def;
+  g.position.fromArray(def.position);
+  g.rotation.set(def.rotation[0], def.rotation[1], def.rotation[2]);
+  if (def.scale) g.scale.fromArray(def.scale);
+  g.traverse(c => { if (c.isMesh){ c.castShadow = true; c.receiveShadow = true; } });
+  return g;
+}
+function rebuild(def){
+  const old = objectsByName.get(def.name);
+  if (old){ propsGroup.remove(old); disposeTree(old); }
+  const g = buildObject(def);
+  propsGroup.add(g); objectsByName.set(def.name, g);
+  return g;
+}
+function disposeTree(root){
+  root.traverse(c => { if (c.isMesh){ c.geometry.dispose(); } });
+}
+sceneManifest.objects.forEach(def => rebuild(def));
+
+/* ============================ LIGHTING ============================ */
+scene.add(new THREE.HemisphereLight(0xf3ece0, 0x50412f, 1.15));
+const key = new THREE.DirectionalLight(0xfff3e0, 1.05);
+key.position.set(2.6, 3.4, 1.4); key.castShadow = true;
+key.shadow.mapSize.set(2048,2048);
+key.shadow.camera.left=-4; key.shadow.camera.right=4;
+key.shadow.camera.top=6;  key.shadow.camera.bottom=-8;
+key.shadow.camera.far=22; key.shadow.bias = -0.0009;
+scene.add(key);
+// warm ceiling spots roughly where the track lights sit in the frame
+const CEIL_LAMPS = [[-1.9,-3.9],[0.8,-3.3],[2.6,-1.6],[-2.5,-1.9],[0.6,-0.3]];
+const ceilingLights = [], ceilingBulbs = [];
+CEIL_LAMPS.forEach(([x,z])=>{
+  const p = new THREE.PointLight(0xffd9a8, 2.2, 5.5, 2);
+  p.position.set(x, R.height-0.18, z); scene.add(p); ceilingLights.push(p);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.045,8,6),
+    new THREE.MeshBasicMaterial({color:0xffd9a8}));
+  bulb.position.copy(p.position); scene.add(bulb); ceilingBulbs.push(bulb);
+});
+function placeCeilingLights(){
+  if (typeof ceilingLights === 'undefined') return;
+  for (let i=0;i<ceilingLights.length;i++){
+    ceilingLights[i].position.y = R.height - 0.18;
+    ceilingBulbs[i].position.y  = R.height - 0.18;
+  }
+}
+// daylight spilling in through the rear doorway and the right-hand window
+const doorLight = new THREE.PointLight(0xcfe2ff, 3.0, 6, 2);
+doorLight.position.set(R.doorway.x, 1.6, R.backWallZ-1.2); scene.add(doorLight);
+
+buildRoom();   // lights exist by now, so placeCeilingLights() resolves
+
+const grid = new THREE.GridHelper(12, 48, 0x3a7ca5, 0x2a2f35);
+grid.position.y = 0.003; grid.visible = false; scene.add(grid);
+
+/* ============================ VIEWPORT (locked to CCTV aspect) ============================ */
+const REF_ASPECT = 1920/1073;
+let view = { x:0, y:0, w:0, h:0 };
+function resize(){
+  const W = innerWidth, H = innerHeight;
+  let w = W, h = W / REF_ASPECT;
+  if (h > H){ h = H; w = H * REF_ASPECT; }
+  view = { x:(W-w)/2, y:(H-h)/2, w, h };
+  renderer.setSize(w, h, false);
+  const dpr = renderer.getPixelRatio();
+  if (typeof rt !== 'undefined') rt.setSize(Math.round(w*dpr), Math.round(h*dpr));
+  const cv = renderer.domElement;
+  cv.style.position = 'absolute';
+  cv.style.left = view.x+'px'; cv.style.top = view.y+'px';
+  cv.style.width = w+'px'; cv.style.height = h+'px';
+  camera.aspect = REF_ASPECT;
+  camera.updateProjectionMatrix();
+  layoutOverlay();
+}
+addEventListener('resize', resize);
+
+/* ============================ REFERENCE OVERLAY ============================ */
+const refImg = document.getElementById('refImg');
+const ov = { opacity:0, x:0, y:0, sx:1, sy:1, rot:0 };
+/* photo <-> 3D calibration state (the tool itself lives further down) */
+const calib = { on:false, view:'3d', pairs:[], pending:null, sel:-1, hover:null, mouse:null,
+                down:null, drag:-1, prev:null, photo:'', wantOn:false, painted:false, tickN:0, sig:0 };
+const CAL_OPACITY = { '3d':0, photo:1, blend:0.5 };
+const OV_IDENTITY = { x:0, y:0, sx:1, sy:1, rot:0 };
+function layoutOverlay(){
+  // while calibrating, pairs live in raw photo coordinates, so the manual nudge is ignored
+  const o = calib.on ? OV_IDENTITY : ov;
+  refImg.style.width  = view.w+'px';
+  refImg.style.height = view.h+'px';
+  refImg.style.transform =
+    'translate('+(view.x+o.x)+'px,'+(view.y+o.y)+'px) rotate('+o.rot+'deg) scale('+o.sx+','+o.sy+')';
+  refImg.style.opacity = calib.on ? CAL_OPACITY[calib.view] : ov.opacity;
+}
+document.getElementById('loadRef').onclick = () => document.getElementById('refFile').click();
+document.getElementById('refFile').onchange = (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  refImg.src = URL.createObjectURL(f);
+  if (+document.getElementById('ovOpacity').value === 0){
+    document.getElementById('ovOpacity').value = 0.5;
+    document.getElementById('ovOpacity').dispatchEvent(new Event('input'));
+  }
+};
+document.getElementById('fitRef').onclick = () => {
+  ov.x=0; ov.y=0; ov.sx=1; ov.sy=1; ov.rot=0;
+  [['ovX',0],['ovY',0],['ovSX',1],['ovSY',1],['ovR',0]].forEach(([id,v])=>{
+    const el=document.getElementById(id); el.value=v; el.dispatchEvent(new Event('input'));
+  });
+};
+function bindRange(id, fmt, apply){
+  const el = document.getElementById(id), out = document.getElementById(id+'V');
+  const h = () => { const v = +el.value; if (out) out.textContent = fmt(v); apply(v); };
+  el.addEventListener('input', h); h();
+}
+bindRange('ovOpacity', v=>v.toFixed(2), v=>{ ov.opacity=v; layoutOverlay(); });
+bindRange('ovX',  v=>v.toFixed(0), v=>{ ov.x=v; layoutOverlay(); });
+bindRange('ovY',  v=>v.toFixed(0), v=>{ ov.y=v; layoutOverlay(); });
+bindRange('ovSX', v=>v.toFixed(3), v=>{ ov.sx=v; layoutOverlay(); });
+bindRange('ovSY', v=>v.toFixed(3), v=>{ ov.sy=v; layoutOverlay(); });
+bindRange('ovR',  v=>v.toFixed(2), v=>{ ov.rot=v; layoutOverlay(); });
+
+/* ============================ LENS DISTORTION PASS ============================
+   The CCTV source is a wide-angle lens, so straight edges bow outward. The scene
+   is rendered with a pinhole camera into a render target, then resampled with the
+   radial model  src = c + (p-c) * (1 + k1*r^2 + k2*r^4),  r normalised to the
+   half-height. Screen picking applies exactly the same warp so clicks stay true. */
+const lens = { k1: sceneManifest.camera.k1 || 0, k2: sceneManifest.camera.k2 || 0, on: true };
+const rt = new THREE.WebGLRenderTarget(2, 2, {
+  minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+  depthBuffer: true, stencilBuffer: false   // keep linear; the final pass encodes to sRGB
+});
+const quadScene = new THREE.Scene();
+const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const lensMat = new THREE.ShaderMaterial({
+  uniforms: { tDiffuse:{value:rt.texture}, k1:{value:lens.k1}, k2:{value:lens.k2}, aspect:{value:REF_ASPECT} },
+  vertexShader: [
+    'varying vec2 vUv;',
+    'void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }'
+  ].join(String.fromCharCode(10)),
+  fragmentShader: [
+    'uniform sampler2D tDiffuse; uniform float k1; uniform float k2; uniform float aspect;',
+    'varying vec2 vUv;',
+    'void main(){',
+    '  vec2 c = (vUv - 0.5) * 2.0;',
+    '  vec2 d = vec2(c.x * aspect, c.y);',
+    '  float r2 = dot(d, d);',
+    '  float s = 1.0 + k1 * r2 + k2 * r2 * r2;',
+    '  vec2 src = c * s * 0.5 + 0.5;',
+    '  if (src.x < 0.0 || src.x > 1.0 || src.y < 0.0 || src.y > 1.0) {',
+    '    gl_FragColor = vec4(0.055, 0.062, 0.071, 1.0); return; }',
+    '  gl_FragColor = texture2D(tDiffuse, src);',
+    '}'
+  ].join(String.fromCharCode(10))
+});
+quadScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), lensMat));
+
+/* warp a point given in output/screen space into the undistorted render space */
+function lensWarp(nx, ny){
+  if (!lens.on) return [nx, ny];
+  const dx = nx * REF_ASPECT, dy = ny;
+  const r2 = dx*dx + dy*dy;
+  const s = 1 + lens.k1*r2 + lens.k2*r2*r2;
+  return [nx*s, ny*s];
+}
+const lensInit = [lens.k1, lens.k2];   // bindRange reads the (blank) slider at once and would zero these
+bindRange('lk1', v=>v.toFixed(3), v=>{ lens.k1=v; lensMat.uniforms.k1.value=v; });
+bindRange('lk2', v=>v.toFixed(3), v=>{ lens.k2=v; lensMat.uniforms.k2.value=v; });
+document.getElementById('lk1').value = lensInit[0]; document.getElementById('lk1').dispatchEvent(new Event('input'));
+document.getElementById('lk2').value = lensInit[1]; document.getElementById('lk2').dispatchEvent(new Event('input'));
+document.getElementById('lensOff').onclick = (e)=>{
+  lens.on = !lens.on;
+  lensMat.uniforms.k1.value = lens.on ? lens.k1 : 0;
+  lensMat.uniforms.k2.value = lens.on ? lens.k2 : 0;
+  e.target.textContent = lens.on ? 'disable lens' : 'enable lens';
+  e.target.classList.toggle('on', !lens.on);
+};
+
+
+/* ============================ CAMERA CONTROLS ============================ */
+const camState = {
+  pos: sceneManifest.camera.position.slice(),
+  tgt: sceneManifest.camera.target.slice(),
+  fov: sceneManifest.camera.fov,
+  roll: sceneManifest.camera.roll || 0
+};
+function pushCamera(){
+  camera.position.set(camState.pos[0], camState.pos[1], camState.pos[2]);
+  camera.fov = camState.fov;
+  camera.up.set(0,1,0);
+  camera.lookAt(camState.tgt[0], camState.tgt[1], camState.tgt[2]);
+  if (camState.roll) camera.rotateZ(THREE.MathUtils.degToRad(camState.roll));
+  camera.updateProjectionMatrix();
+  controls.target.set(camState.tgt[0], camState.tgt[1], camState.tgt[2]);
+}
+function syncCamUI(){
+  const set = (id,v,f)=>{ const el=document.getElementById(id); el.value=v;
+    const o=document.getElementById(id+'V'); if(o) o.textContent=(+v).toFixed(f===undefined?2:f); };
+  set('cpx',camState.pos[0]); set('cpy',camState.pos[1]); set('cpz',camState.pos[2]);
+  set('ctx',camState.tgt[0]); set('cty',camState.tgt[1]); set('ctz',camState.tgt[2]);
+  set('cfov',camState.fov,1); set('croll',camState.roll);
+}
+[['cpx',v=>camState.pos[0]=v],['cpy',v=>camState.pos[1]=v],['cpz',v=>camState.pos[2]=v],
+ ['ctx',v=>camState.tgt[0]=v],['cty',v=>camState.tgt[1]=v],['ctz',v=>camState.tgt[2]=v],
+ ['cfov',v=>camState.fov=v],['croll',v=>camState.roll=v]].forEach(([id,setter])=>{
+  const el = document.getElementById(id), out = document.getElementById(id+'V');
+  el.addEventListener('input', ()=>{
+    const v=+el.value; setter(v); if(out) out.textContent = v.toFixed(id==='cfov'?1:2);
+    pushCamera();
+  });
+});
+document.getElementById('camReset').onclick = ()=>{
+  camState.pos = sceneManifest.camera.position.slice();
+  camState.tgt = sceneManifest.camera.target.slice();
+  camState.fov = sceneManifest.camera.fov;
+  camState.roll = sceneManifest.camera.roll || 0;
+  syncCamUI(); pushCamera();
+};
+const camFreeBtn = document.getElementById('camFree');
+camFreeBtn.onclick = ()=>{
+  orbitWanted = !orbitWanted;
+  syncControls();
+  camFreeBtn.classList.toggle('on', orbitWanted);
+  if (!orbitWanted) pushCamera();       // re-apply roll, which orbit overrides
+};
+
+/* shift + wheel changes the field of view; a plain wheel dollies (OrbitControls) */
+renderer.domElement.addEventListener('wheel', (ev)=>{
+  if (!ev.shiftKey) return;
+  ev.preventDefault(); ev.stopPropagation();
+  const next = THREE.MathUtils.clamp(camState.fov + Math.sign(ev.deltaY) * 1.5, 15, 140);
+  camState.fov = next;
+  camera.fov = next; camera.updateProjectionMatrix();
+  syncCamUI();
+}, { passive:false, capture:true });
+controls.addEventListener('change', ()=>{
+  if (!controls.enabled) return;
+  camState.pos = camera.position.toArray();
+  camState.tgt = controls.target.toArray();
+  camState.fov = camera.fov;
+  syncCamUI();
+});
+syncCamUI(); pushCamera();
+
+/* ============================ OBJECT EDITING ============================ */
+const tcontrols = new TransformControls(camera, renderer.domElement);
+tcontrols.addEventListener('dragging-changed', e => { controls.enabled = orbitWanted && !e.value; });
+tcontrols.addEventListener('objectChange', () => { if (selected) { writeBack(selected); syncObjUI(); } });
+scene.add(tcontrols);
+
+const objSel = document.getElementById('objSel');
+sceneManifest.objects.forEach(o => {
+  const opt = document.createElement('option');
+  opt.value = o.name; opt.textContent = o.name;
+  objSel.appendChild(opt);
+});
+let selected = null;
+function selectByName(name){
+  const g = objectsByName.get(name); if (!g) return;
+  selected = g; tcontrols.attach(g); objSel.value = name; syncObjUI();
+}
+objSel.onchange = () => selectByName(objSel.value);
+
+function writeBack(g){
+  const d = g.userData.def;
+  d.position = [ +g.position.x.toFixed(4), +g.position.y.toFixed(4), +g.position.z.toFixed(4) ];
+  d.rotation = [ +g.rotation.x.toFixed(4), +g.rotation.y.toFixed(4), +g.rotation.z.toFixed(4) ];
+  d.scale    = [ +g.scale.x.toFixed(4),    +g.scale.y.toFixed(4),    +g.scale.z.toFixed(4) ];
+}
+const F = id => document.getElementById(id);
+function syncObjUI(){
+  if (!selected) return;
+  const d = selected.userData.def, r = THREE.MathUtils.radToDeg;
+  F('opx').value = selected.position.x.toFixed(3);
+  F('opy').value = selected.position.y.toFixed(3);
+  F('opz').value = selected.position.z.toFixed(3);
+  F('orx').value = r(selected.rotation.x).toFixed(2);
+  F('ory').value = r(selected.rotation.y).toFixed(2);
+  F('orz').value = r(selected.rotation.z).toFixed(2);
+  F('osx').value = selected.scale.x.toFixed(3);
+  F('osy').value = selected.scale.y.toFixed(3);
+  F('osz').value = selected.scale.z.toFixed(3);
+  F('odw').value = d.dimensions[0].toFixed(3);
+  F('odh').value = d.dimensions[1].toFixed(3);
+  F('odd').value = d.dimensions[2].toFixed(3);
+}
+F('objApply').onclick = () => {
+  if (!selected) return;
+  const d = selected.userData.def, deg = THREE.MathUtils.degToRad;
+  d.position = [+F('opx').value, +F('opy').value, +F('opz').value];
+  d.rotation = [deg(+F('orx').value), deg(+F('ory').value), deg(+F('orz').value)];
+  d.scale    = [+F('osx').value, +F('osy').value, +F('osz').value];
+  const nd = [+F('odw').value, +F('odh').value, +F('odd').value];
+  const changed = nd.some((v,i)=>Math.abs(v-d.dimensions[i])>1e-6);
+  d.dimensions = nd;
+  const g = changed ? rebuild(d) : selected;
+  if (!changed){
+    g.position.fromArray(d.position);
+    g.rotation.set(d.rotation[0],d.rotation[1],d.rotation[2]);
+    g.scale.fromArray(d.scale);
+  }
+  selected = g; tcontrols.attach(g); syncObjUI();
+};
+F('objHide').onclick = () => { if (selected) selected.visible = !selected.visible; };
+let isolated = false;
+F('objIso').onclick = () => {
+  isolated = !isolated;
+  propsGroup.children.forEach(c => c.visible = !isolated || c === selected);
+  F('objIso').classList.toggle('on', isolated);
+};
+const modeBtns = [F('tMode0'),F('tMode1'),F('tMode2')];
+const modes = ['translate','rotate','scale'];
+modeBtns.forEach((b,i)=> b.onclick = ()=>{
+  tcontrols.setMode(modes[i]); tcontrols.enabled = true; tcontrols.visible = true;
+  modeBtns.forEach((x,j)=>x.classList.toggle('on', i===j));
+});
+F('tOff').onclick = ()=>{ tcontrols.enabled=false; tcontrols.visible=false;
+  modeBtns.forEach(x=>x.classList.remove('on')); };
+selectByName(sceneManifest.objects[0].name);
+
+/* ============================ PICKING ============================ */
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+function toNDC(ev){
+  const w = lensWarp(((ev.clientX - view.x) / view.w) * 2 - 1,
+                     -((ev.clientY - view.y) / view.h) * 2 + 1);
+  ndc.x = w[0]; ndc.y = w[1];
+  return ndc;
+}
+function pickGroup(ev){
+  ray.setFromCamera(toNDC(ev), camera);
+  const hits = ray.intersectObjects(propsGroup.children, true);
+  if (!hits.length) return null;
+  let o = hits[0].object;
+  while (o && !objectsByName.has(o.name)) o = o.parent;
+  return o;
+}
+/* left-drag belongs to OrbitControls, so an object is only selected when the
+   pointer went down and up in nearly the same place (a click, not a rotate).  */
+let downAt = null;
+renderer.domElement.addEventListener('pointerdown', ev => {
+  downAt = (ev.button === 0 && !calib.on && !tcontrols.dragging)
+    ? { x: ev.clientX, y: ev.clientY } : null;
+});
+renderer.domElement.addEventListener('pointerup', ev => {
+  if (!downAt) return;
+  const moved = Math.hypot(ev.clientX - downAt.x, ev.clientY - downAt.y);
+  downAt = null;
+  if (moved > 4 || tcontrols.dragging) return;
+  const g = pickGroup(ev);
+  if (g) selectByName(g.name);
+});
+
+/* ============================ PHOTO <-> 3D CALIBRATION ============================
+   Each pair ties a world point on the model (snapped to a box / wall / doorway
+   corner) to a pixel in the reference photo. Levenberg-Marquardt then fits the
+   camera - position, yaw/pitch/roll, and optionally FOV and lens k1/k2 - to the
+   reprojection error in PHOTO pixels, measured through the same forward lens model
+   the render shows. It starts from the current, manifest and pinned views plus,
+   with 6+ non-coplanar pairs, a DLT estimate, and keeps the lowest result.
+   Photo points are stored as raw 0..1 image coordinates, so they stay valid when
+   the camera or the lens changes.                                                */
+const CAL_KEY = 'bakery.calibPairs', SNAP_PX = 14;
+const calMarks = F('calMarks'), calLoupe = F('calLoupe'), calList = F('calList');
+const calHintDefault = F('calHint').innerHTML, calErrDefault = F('calErr').textContent;
+const _cw = new THREE.Vector3(), _occ = new THREE.Vector3(), _sf = new THREE.Vector3();
+const _sc = new THREE.PerspectiveCamera();
+const clamp = THREE.MathUtils.clamp;
+
+const photoReady = () => refImg.complete && refImg.naturalWidth > 0;
+const photoW = () => refImg.naturalWidth || 1920;
+const photoH = () => refImg.naturalHeight || 1073;
+const displayK = () => lens.on ? [lens.k1, lens.k2] : [0, 0];
+
+/* the render's radial lens model, both directions, for arbitrary k1/k2 */
+function warpK(nx, ny, k1, k2){                 // shown (distorted) -> pinhole NDC
+  const dx = nx*REF_ASPECT, r2 = dx*dx + ny*ny, s = 1 + k1*r2 + k2*r2*r2;
+  return [nx*s, ny*s];
+}
+function lensFold(k1, k2){                      // first radius where r(1 + k1 r^2 + k2 r^4) stops rising
+  let u = Infinity;                             // root of 1 + 3 k1 u + 5 k2 u^2, u = r^2
+  if (Math.abs(k2) < 1e-12){ if (k1 < 0) u = -1/(3*k1); }
+  else {
+    const A = 5*k2, B = 3*k1, disc = B*B - 4*A;
+    if (disc >= 0) for (const x of [(-B - Math.sqrt(disc))/(2*A), (-B + Math.sqrt(disc))/(2*A)])
+      if (x > 0 && x < u) u = x;
+  }
+  return Math.sqrt(u);
+}
+function distortK(px, py, k1, k2){              // pinhole NDC -> where the lens shows it
+  const rp = Math.hypot(px*REF_ASPECT, py);
+  if (rp < 1e-12 || (!k1 && !k2)) return [px, py];
+  const G = r => { const r2 = r*r; return r*(1 + k1*r2 + k2*r2*r2); };
+  let lo = 0, hi = Math.min(lensFold(k1, k2), 10), r;
+  if (G(hi) <= rp) r = hi;                      // past what the lens can show: pin to the fold
+  else {
+    r = rp < hi ? rp : hi/2;
+    for (let i = 0; i < 40; i++){               // Newton, kept inside the bracket by bisection
+      const r2 = r*r, g = G(r) - rp, dg = 1 + 3*k1*r2 + 5*k2*r2*r2;
+      if (g > 0) hi = r; else lo = r;
+      let nr = r - g/dg;
+      if (!(nr > lo && nr < hi)) nr = (lo + hi)/2;
+      if (Math.abs(nr - r) < 1e-14){ r = nr; break; }
+      r = nr;
+    }
+  }
+  return [px*r/rp, py*r/rp];
+}
+/* world -> distorted NDC through `cam`, or null when behind the lens */
+function projectNdc(w, cam, k1, k2){
+  _cw.set(w[0], w[1], w[2]).applyMatrix4(cam.matrixWorldInverse);
+  if (_cw.z > -0.02) return null;
+  _cw.applyMatrix4(cam.projectionMatrix);
+  return distortK(_cw.x, _cw.y, k1, k2);
+}
+const ndcToScreen = n => [view.x + (n[0]+1)/2*view.w, view.y + (1-n[1])/2*view.h];
+const imgToScreen = n => [view.x + n[0]*view.w, view.y + n[1]*view.h];
+function screenToImg(x, y){
+  const u = (x - view.x)/view.w, v = (y - view.y)/view.h;
+  return (u < 0 || v < 0 || u > 1 || v > 1) ? null : [u, v];
+}
+function worldToScreen(w){
+  const k = displayK(), n = projectNdc(w, camera, k[0], k[1]);
+  return n && ndcToScreen(n);
+}
+function pairErrPx(p, cam, k1, k2){
+  const s = projectNdc(p.w, cam, k1, k2);
+  return s ? Math.hypot((s[0] - (p.n[0]*2 - 1))*photoW()/2, (s[1] - (1 - p.n[1]*2))*photoH()/2) : Infinity;
+}
+
+/* ---------- picking a world point, snapped to a nearby corner ---------- */
+function visibleChain(o){ for (; o; o = o.parent) if (!o.visible) return false; return true; }
+function castVisible(){
+  const f = floorGroup.getObjectByName('floorPlane');      // not the plank seams
+  return ray.intersectObjects(f ? [propsGroup, roomGroup, f] : [propsGroup, roomGroup], true)
+            .filter(h => h.object.isMesh && visibleChain(h.object));
+}
+function occluded(p){
+  const d = _occ.copy(p).sub(camera.position).length();
+  ray.set(camera.position, _occ.divideScalar(d));
+  const h = castVisible();
+  return h.length > 0 && h[0].distance < d - 0.03;
+}
+function pickWorld(x, y, snap){
+  ray.setFromCamera(toNDC({ clientX:x, clientY:y }), camera);
+  const hits = castVisible();
+  if (!hits.length) return null;
+  const out = { p: hits[0].point.clone(), snapped: false };
+  if (!snap) return out;
+  // corners of the few surfaces under the cursor - boxes and planes only, since a
+  // sphere's vertices are not features anyone can find in the photo
+  const cands = [], seenMesh = new Set(), seenPt = new Set();
+  for (const h of hits){
+    if (seenMesh.size >= 4 || h.distance > hits[0].distance + 0.8) break;
+    const m = h.object;
+    if (seenMesh.has(m)) continue;
+    seenMesh.add(m);
+    const t = m.geometry.type;
+    if (t !== 'BoxGeometry' && t !== 'PlaneGeometry') continue;
+    const pos = m.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++){
+      const v = new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+      const key = v.x.toFixed(4) + ',' + v.y.toFixed(4) + ',' + v.z.toFixed(4);
+      if (seenPt.has(key)) continue;
+      seenPt.add(key);
+      const s = worldToScreen([v.x, v.y, v.z]);
+      if (!s) continue;
+      const d = Math.hypot(s[0] - x, s[1] - y);
+      if (d < SNAP_PX) cands.push({ v, d });
+    }
+  }
+  cands.sort((a, b) => a.d - b.d);
+  for (let i = 0; i < Math.min(5, cands.length); i++){
+    if (!occluded(cands[i].v)){ out.p.copy(cands[i].v); out.snapped = true; break; }
+  }
+  return out;
+}
+
+/* ---------- mode and view ---------- */
+function syncControls(){
+  controls.enabled = orbitWanted && !(calib.on && calib.view === 'photo');
+}
+function setCalibView(v){
+  calib.view = v;
+  [['calV3d','3d'],['calVPhoto','photo'],['calVBlend','blend']].forEach(([id, k]) =>
+    F(id).classList.toggle('on', calib.on && k === v));
+  layoutOverlay(); syncControls(); calHint();
+}
+function setCalib(on){
+  if (on && !photoReady()){
+    calib.wantOn = true; F('refFile').click();
+    calHint('Pick the CCTV photo to calibrate against.');
+    return;
+  }
+  calib.on = on; calib.pending = null; calib.hover = null; calib.down = null; calib.drag = -1;
+  F('calOn').classList.toggle('on', on);
+  F('calOn').textContent = on ? 'done' : 'calibrate';
+  // the transform gizmo would swallow clicks meant for picking
+  if (on){ calib.tc = { enabled: tcontrols.enabled, visible: tcontrols.visible };
+           tcontrols.enabled = false; tcontrols.visible = false; }
+  else if (calib.tc){ tcontrols.enabled = calib.tc.enabled; tcontrols.visible = calib.tc.visible; }
+  setCalibView(calib.view);
+  renderCalibList();
+}
+function minPairs(){
+  const nf = 6 + F('calFov').checked + F('calK1').checked + F('calK2').checked;
+  return Math.max(4, Math.ceil((nf + 1)/2));
+}
+function calHint(msg){
+  const el = F('calHint');
+  if (msg){ el.textContent = msg; return; }
+  if (!calib.on){ el.innerHTML = calHintDefault; return; }
+  const pd = calib.pending, n = calib.pairs.length, need = minPairs();
+  const s = pd && pd.w ? 'Now click the SAME feature in the photo. Esc cancels.'
+          : pd         ? 'Now click the SAME feature in the 3D scene. Esc cancels.'
+          : calib.view === 'photo' ? 'Click a feature in the photo, or drag a cyan marker to fine-tune it.'
+          : 'Click a feature in the 3D scene - corners snap (◆), Shift-click for a free point. Press 2 to start from the photo instead.';
+  el.textContent = s + '  ' + n + ' pair' + (n === 1 ? '' : 's') +
+    (n < need ? ' - solving needs ' + need + '.' : ' - ready to solve.');
+}
+
+/* ---------- pairs ---------- */
+function saveCalib(){
+  try { localStorage.setItem(CAL_KEY, JSON.stringify({ photo: calib.photo,
+    pairs: calib.pairs.map(p => ({ w:p.w, n:p.n, snap:!!p.snap })) })); } catch(e){}
+}
+function renderCalibList(){
+  const st = calList.scrollTop, W = photoW(), H = photoH(), k = displayK();
+  camera.updateMatrixWorld();
+  calList.innerHTML = '';
+  if (calib.pending){
+    const d = document.createElement('div');
+    d.className = 'pr pend';
+    d.textContent = calib.pending.w ? '… 3D point picked - click it in the photo'
+                                    : '… photo point picked - click it in 3D';
+    calList.appendChild(d);
+  }
+  if (!calib.pairs.length && !calib.pending) calList.textContent = 'no pairs yet';
+  calib.pairs.forEach((p, i) => {
+    const e = pairErrPx(p, camera, k[0], k[1]);
+    const row = document.createElement('div');
+    row.className = 'pr' + (i === calib.sel ? ' sel' : '');
+    row.innerHTML = '<b>' + (i+1) + '</b><span class="w">' + (p.snap ? '◆ ' : '') +
+      p.w.map(v => v.toFixed(2)).join(', ') + ' → ' + Math.round(p.n[0]*W) + ',' + Math.round(p.n[1]*H) +
+      '</span><span class="e ' + (e < 3 ? 'ok' : e < 10 ? 'mid' : 'bad') + '">' +
+      (isFinite(e) ? e.toFixed(1) + 'px' : 'behind') + '</span><button class="x" title="remove">×</button>';
+    row.onclick = ev => ev.target.classList.contains('x') ? removePair(i) : selectPair(i);
+    calList.appendChild(row);
+  });
+  calList.scrollTop = st;
+  calHint();
+}
+function selectPair(i){ calib.sel = (calib.sel === i) ? -1 : i; renderCalibList(); }
+function removePair(i){
+  calib.pairs.splice(i, 1);
+  if (calib.sel === i) calib.sel = -1; else if (calib.sel > i) calib.sel--;
+  saveCalib(); renderCalibList();
+}
+function addPair(w, n, snap){
+  calib.pairs.push({ w, n, snap: !!snap });
+  calib.sel = calib.pairs.length - 1;
+  saveCalib();
+}
+/* a click picks whichever half of the pair is missing; with nothing pending,
+   the photo view picks a photo point and the 3D / blend views a world point */
+function calibClick(x, y, shift){
+  const pd = calib.pending;
+  const wantImage = pd ? !!pd.w : calib.view === 'photo';
+  if (wantImage){
+    if (!photoReady()){ calHint('Load the CCTV photo first.'); return; }
+    const n = screenToImg(x, y);
+    if (!n) return;
+    if (pd){ addPair(pd.w, n, pd.snap); calib.pending = null; setCalibView(pd.from); }
+    else   { calib.pending = { n, from:'photo' }; setCalibView('3d'); }
+  } else {
+    const hit = pickWorld(x, y, F('calSnap').checked && !shift);
+    if (!hit){ calHint('No geometry under the cursor - click on a surface.'); return; }
+    const w = hit.p.toArray().map(v => +v.toFixed(4));
+    if (pd){ addPair(w, pd.n, hit.snapped); calib.pending = null; setCalibView('photo'); }
+    else   { calib.pending = { w, snap: hit.snapped, from: calib.view }; setCalibView('photo'); }
+  }
+  renderCalibList();
+}
+
+const cvs = renderer.domElement;
+cvs.addEventListener('pointerdown', ev => {
+  if (!calib.on || ev.button !== 0) return;
+  if (calib.view === 'photo' && !calib.pending){       // grab a photo marker to nudge it
+    let best = -1, bd = 9;
+    calib.pairs.forEach((p, i) => {
+      const s = imgToScreen(p.n), d = Math.hypot(s[0] - ev.clientX, s[1] - ev.clientY);
+      if (d < bd){ bd = d; best = i; }
+    });
+    if (best >= 0){
+      calib.drag = best; calib.sel = best;
+      cvs.setPointerCapture(ev.pointerId); renderCalibList();
+      return;
+    }
+  }
+  calib.down = { x: ev.clientX, y: ev.clientY };
+});
+cvs.addEventListener('pointermove', ev => {
+  if (calib.drag < 0) return;
+  const n = screenToImg(ev.clientX, ev.clientY);
+  if (n) calib.pairs[calib.drag].n = n;
+});
+cvs.addEventListener('pointerup', ev => {
+  if (calib.drag >= 0){ calib.drag = -1; saveCalib(); renderCalibList(); return; }
+  if (!calib.on || !calib.down) return;
+  const moved = Math.hypot(ev.clientX - calib.down.x, ev.clientY - calib.down.y);
+  calib.down = null;
+  if (moved <= 4) calibClick(ev.clientX, ev.clientY, ev.shiftKey);   // a drag is an orbit
+});
+addEventListener('pointermove', ev => {
+  calib.mouse = { x: ev.clientX, y: ev.clientY, shift: ev.shiftKey, over: ev.target === cvs };
+});
+document.documentElement.addEventListener('pointerleave', () => { if (calib.mouse) calib.mouse.over = false; });
+addEventListener('keyup', ev => { if (calib.mouse) calib.mouse.shift = ev.shiftKey; });
+addEventListener('keydown', ev => {
+  if (calib.mouse) calib.mouse.shift = ev.shiftKey;
+  if (!calib.on) return;
+  const t = ev.target;
+  if (t && (t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' ||
+           (t.tagName === 'INPUT' && /^(text|number|search)$/.test(t.type)))) return;
+  if (ev.key === '1') setCalibView('3d');
+  else if (ev.key === '2') setCalibView('photo');
+  else if (ev.key === '3') setCalibView('blend');
+  else if (ev.key === 'Escape'){ calib.pending = null; renderCalibList(); }
+  else if ((ev.key === 'Delete' || ev.key === 'Backspace') && calib.sel >= 0){
+    removePair(calib.sel); ev.preventDefault();
+  }
+});
+
+F('calOn').onclick = () => setCalib(!calib.on);
+[['calV3d','3d'],['calVPhoto','photo'],['calVBlend','blend']].forEach(([id, v]) =>
+  F(id).onclick = () => { if (calib.on) setCalibView(v); else { calib.view = v; setCalib(true); } });
+F('calUndo').onclick = () => {
+  if (calib.pending){ calib.pending = null; renderCalibList(); }
+  else if (calib.pairs.length) removePair(calib.pairs.length - 1);
+};
+F('calClear').onclick = () => {
+  if (calib.pairs.length > 3 && !confirm('Remove all ' + calib.pairs.length + ' pairs?')) return;
+  calib.pairs = []; calib.pending = null; calib.sel = -1;
+  saveCalib(); renderCalibList();
+  F('calErr').textContent = calErrDefault;
+};
+['calFov','calK1','calK2'].forEach(id => F(id).addEventListener('change', () => calHint()));
+F('refFile').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (calib.pairs.length && calib.photo && calib.photo !== f.name)
+    F('calErr').textContent = calib.pairs.length + ' saved pairs were picked on ' + calib.photo +
+      ' - clear them if this photo is from a different camera.';
+  calib.photo = f.name; saveCalib();
+});
+refImg.addEventListener('load', () => {
+  const a = refImg.naturalWidth / refImg.naturalHeight;
+  if (Math.abs(a/REF_ASPECT - 1) > 0.02)
+    F('calErr').textContent = 'The photo is ' + refImg.naturalWidth + '×' + refImg.naturalHeight +
+      ': its aspect differs from the 1920:1073 viewport, so it is stretched to fit and the solve is only approximate.';
+  if (calib.wantOn){ calib.wantOn = false; setCalib(true); }
+  else renderCalibList();                    // pixel coordinates follow the photo size
+});
+
+/* ---------- solver ----------
+   theta = [px,py,pz, yaw,pitch,roll (rad), fov (deg), k1, k2]; yaw/pitch give the
+   lookAt direction and roll is the same rotateZ that pushCamera() applies.     */
+const STEP = [1e-5,1e-5,1e-5, 1e-6,1e-6,1e-6, 1e-4, 1e-6,1e-6];
+function solverCam(t){
+  _sc.fov = t[6]; _sc.aspect = REF_ASPECT; _sc.near = 0.05; _sc.far = 200;
+  _sc.position.set(t[0], t[1], t[2]);
+  _sc.up.set(0, 1, 0);
+  const cp = Math.cos(t[4]);
+  _sc.lookAt(_sf.set(Math.sin(t[3])*cp, Math.sin(t[4]), -Math.cos(t[3])*cp).add(_sc.position));
+  _sc.rotateZ(t[5]);
+  _sc.updateMatrixWorld(true); _sc.updateProjectionMatrix();
+  return _sc;
+}
+function thetaOf(pos, tgt, fov, rollDeg, k1, k2){
+  const f = new THREE.Vector3(tgt[0]-pos[0], tgt[1]-pos[1], tgt[2]-pos[2]).normalize();
+  return [pos[0], pos[1], pos[2], Math.atan2(f.x, -f.z), Math.asin(clamp(f.y, -1, 1)),
+          THREE.MathUtils.degToRad(rollDeg || 0), fov, k1, k2];
+}
+function clampTheta(t){
+  t[4] = clamp(t[4], -1.55, 1.55); t[5] = clamp(t[5], -0.8, 0.8);
+  t[6] = clamp(t[6], 10, 150); t[7] = clamp(t[7], -0.8, 0.8); t[8] = clamp(t[8], -0.4, 0.4);
+  return t;
+}
+function residuals(t, P, out){
+  const cam = solverCam(t), hw = photoW()/2, hh = photoH()/2;
+  for (let i = 0, k = 0; i < P.length; i++){
+    const p = P[i], s = projectNdc(p.w, cam, t[7], t[8]);
+    if (!s){ out[k++] = 1e4; out[k++] = 1e4; continue; }      // behind the lens
+    out[k++] = (s[0] - (p.n[0]*2 - 1))*hw;
+    out[k++] = (s[1] - (1 - p.n[1]*2))*hh;
+  }
+  return out;
+}
+function sumSq(r){ let s = 0; for (let i = 0; i < r.length; i++) s += r[i]*r[i]; return s; }
+function solveLin(A, b){                        // Gaussian elimination, partial pivoting
+  const n = b.length, M = A.map((row, i) => row.concat([b[i]]));
+  for (let c = 0; c < n; c++){
+    let p = c;
+    for (let r = c+1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    if (!(Math.abs(M[p][c]) > 1e-300)) return null;
+    const tmp = M[c]; M[c] = M[p]; M[p] = tmp;
+    for (let r = c+1; r < n; r++){
+      const f = M[r][c]/M[c][c];
+      for (let k = c; k <= n; k++) M[r][k] -= f*M[c][k];
+    }
+  }
+  const x = new Array(n);
+  for (let r = n-1; r >= 0; r--){
+    let s = M[r][n];
+    for (let k = r+1; k < n; k++) s -= M[r][k]*x[k];
+    x[r] = s/M[r][r];
+  }
+  return x.every(Number.isFinite) ? x : null;
+}
+function levmar(t0, free, P, iters){
+  const m = P.length*2, nf = free.length;
+  let t = clampTheta(t0.slice()), r = residuals(t, P, new Float64Array(m)), cost = sumSq(r), lam = 1e-3;
+  const J = free.map(() => new Float64Array(m)), tmp = new Float64Array(m);
+  for (let it = 0; it < iters; it++){
+    for (let j = 0; j < nf; j++){                // forward-difference Jacobian
+      const i = free[j], q = t.slice(); q[i] += STEP[i];
+      residuals(q, P, tmp);
+      for (let k = 0; k < m; k++) J[j][k] = (tmp[k] - r[k]) / STEP[i];
+    }
+    const A = [], g = [];
+    for (let a = 0; a < nf; a++){
+      A.push(new Array(nf).fill(0));
+      let s = 0; for (let k = 0; k < m; k++) s += J[a][k]*r[k];
+      g.push(-s);
+    }
+    for (let a = 0; a < nf; a++) for (let b = 0; b <= a; b++){
+      let s = 0; for (let k = 0; k < m; k++) s += J[a][k]*J[b][k];
+      A[a][b] = A[b][a] = s;
+    }
+    let stepped = false;
+    while (lam < 1e12){
+      const D = A.map((row, a) => row.map((v, b) => a === b ? v*(1 + lam) + 1e-9 : v));
+      const d = solveLin(D, g);
+      if (d){
+        const q = t.slice();
+        for (let j = 0; j < nf; j++) q[free[j]] += d[j];
+        clampTheta(q);
+        const rq = residuals(q, P, new Float64Array(m)), cq = sumSq(rq);
+        if (cq < cost){
+          const gain = (cost - cq)/cost;
+          t = q; r = rq; cost = cq; lam = Math.max(1e-12, lam*0.3); stepped = true;
+          if (gain < 1e-10) it = iters;          // converged
+          break;
+        }
+      }
+      lam *= 5;
+    }
+    if (!stepped) break;
+  }
+  return { t, cost, r };
+}
+/* cyclic Jacobi eigen-decomposition of a symmetric n x n matrix (row-major) */
+function jacobiEig(S, n){
+  const a = Float64Array.from(S), v = new Float64Array(n*n);
+  for (let i = 0; i < n; i++) v[i*n+i] = 1;
+  let norm = 0; for (let i = 0; i < n*n; i++) norm += a[i]*a[i];
+  for (let sweep = 0; sweep < 100; sweep++){
+    let off = 0;
+    for (let p = 0; p < n; p++) for (let q = p+1; q < n; q++) off += a[p*n+q]*a[p*n+q];
+    if (off <= 1e-26*norm) break;
+    for (let p = 0; p < n; p++) for (let q = p+1; q < n; q++){
+      const apq = a[p*n+q];
+      if (Math.abs(apq) < 1e-300) continue;
+      const th = (a[q*n+q] - a[p*n+p])/(2*apq);
+      const t = (th >= 0 ? 1 : -1)/(Math.abs(th) + Math.sqrt(th*th + 1));
+      const c = 1/Math.sqrt(t*t + 1), s = t*c;
+      for (let k = 0; k < n; k++){ const kp = a[k*n+p], kq = a[k*n+q]; a[k*n+p] = c*kp - s*kq; a[k*n+q] = s*kp + c*kq; }
+      for (let k = 0; k < n; k++){ const pk = a[p*n+k], qk = a[q*n+k]; a[p*n+k] = c*pk - s*qk; a[q*n+k] = s*pk + c*qk; }
+      for (let k = 0; k < n; k++){ const kp = v[k*n+p], kq = v[k*n+q]; v[k*n+p] = c*kp - s*kq; v[k*n+q] = s*kp + c*kq; }
+    }
+  }
+  const vals = [];
+  for (let i = 0; i < n; i++) vals.push(a[i*n+i]);
+  return { vals, vecs: v };
+}
+/* DLT: a start pose that does not depend on the current camera at all. Needs 6+
+   pairs off a single plane; assumes square pixels and a centred principal point. */
+function dltInit(P, k1, k2){
+  const n = P.length;
+  if (n < 6) return null;
+  let mx = 0, my = 0, mz = 0;
+  P.forEach(p => { mx += p.w[0]; my += p.w[1]; mz += p.w[2]; });
+  mx /= n; my /= n; mz /= n;
+  const C = new Float64Array(9);
+  let dw = 0;
+  P.forEach(p => {
+    const d = [p.w[0]-mx, p.w[1]-my, p.w[2]-mz];
+    dw += Math.hypot(d[0], d[1], d[2]);
+    for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) C[a*3+b] += d[a]*d[b];
+  });
+  const ev = jacobiEig(C, 3).vals;
+  if (Math.min(...ev) < 1e-3*Math.max(...ev)) return null;    // (nearly) one plane: degenerate
+  const sw = Math.sqrt(3)/(dw/n);
+  // undistorted, square-pixel image coordinates (x carries the aspect)
+  const img = P.map(p => { const u = warpK(p.n[0]*2 - 1, 1 - p.n[1]*2, k1, k2); return [u[0]*REF_ASPECT, u[1]]; });
+  let ix = 0, iy = 0;
+  img.forEach(q => { ix += q[0]; iy += q[1]; });
+  ix /= n; iy /= n;
+  let di = 0;
+  img.forEach(q => { di += Math.hypot(q[0]-ix, q[1]-iy); });
+  const si = Math.SQRT2/(di/n);
+  const A = new Float64Array(144), row = new Float64Array(12);
+  const acc = () => { for (let a = 0; a < 12; a++) if (row[a]) for (let b = 0; b < 12; b++) A[a*12+b] += row[a]*row[b]; };
+  for (let i = 0; i < n; i++){
+    const X = [(P[i].w[0]-mx)*sw, (P[i].w[1]-my)*sw, (P[i].w[2]-mz)*sw, 1];
+    const x = (img[i][0]-ix)*si, y = (img[i][1]-iy)*si;
+    row.fill(0); for (let a = 0; a < 4; a++){ row[a]   = X[a]; row[8+a] = -x*X[a]; } acc();
+    row.fill(0); for (let a = 0; a < 4; a++){ row[4+a] = X[a]; row[8+a] = -y*X[a]; } acc();
+  }
+  const E = jacobiEig(A, 12);
+  let mi = 0;
+  for (let i = 1; i < 12; i++) if (E.vals[i] < E.vals[mi]) mi = i;
+  const h = [];
+  for (let i = 0; i < 12; i++) h.push(E.vecs[i*12 + mi]);
+  // undo the normalisation: P = T^-1 * H * U
+  const HU = [0, 1, 2].map(r => { const a = h.slice(r*4, r*4 + 4);
+    return [a[0]*sw, a[1]*sw, a[2]*sw, a[3] - sw*(a[0]*mx + a[1]*my + a[2]*mz)]; });
+  const Pm = [HU[0].map((v, c) => v/si + ix*HU[2][c]), HU[1].map((v, c) => v/si + iy*HU[2][c]), HU[2]];
+  // scale the depth row to unit length, signed so the points sit in front
+  let s3 = Math.hypot(Pm[2][0], Pm[2][1], Pm[2][2]);
+  if (s3 < 1e-12) return null;
+  let front = 0;
+  P.forEach(p => { if (Pm[2][0]*p.w[0] + Pm[2][1]*p.w[1] + Pm[2][2]*p.w[2] + Pm[2][3] > 0) front++; });
+  if (front < n/2) s3 = -s3;
+  Pm.forEach(r => { for (let c = 0; c < 4; c++) r[c] /= s3; });
+  // rows are now f*r1, f*r2, -r3 (three.js looks down -Z), so row 3 is the view direction
+  const r1 = new THREE.Vector3(Pm[0][0], Pm[0][1], Pm[0][2]);
+  const r2 = new THREE.Vector3(Pm[1][0], Pm[1][1], Pm[1][2]);
+  const fw = new THREE.Vector3(Pm[2][0], Pm[2][1], Pm[2][2]);
+  const f = (r1.length() + r2.length())/2;
+  if (!(f > 0.1 && f < 12)) return null;
+  if (r1.clone().cross(r2).dot(fw) > 0) return null;          // mirrored solution
+  const Cc = solveLin(Pm.map(r => r.slice(0, 3)), Pm.map(r => -r[3]));
+  if (!Cc) return null;
+  // roll = angle from the level lookAt frame's up to the recovered up
+  r2.normalize();
+  const up = r2.clone().addScaledVector(fw, -r2.dot(fw)).normalize();
+  _sc.position.set(Cc[0], Cc[1], Cc[2]); _sc.up.set(0, 1, 0);
+  _sc.lookAt(_sf.copy(_sc.position).add(fw)); _sc.updateMatrixWorld(true);
+  const x0 = new THREE.Vector3().setFromMatrixColumn(_sc.matrixWorld, 0);
+  const u0 = new THREE.Vector3().setFromMatrixColumn(_sc.matrixWorld, 1);
+  return [Cc[0], Cc[1], Cc[2], Math.atan2(fw.x, -fw.z), Math.asin(clamp(fw.y, -1, 1)),
+          Math.atan2(-up.dot(x0), up.dot(u0)), THREE.MathUtils.radToDeg(2*Math.atan(1/f)), k1, k2];
+}
+function setLens(k1, k2, on){
+  lens.k1 = k1; lens.k2 = k2;
+  // write the sliders directly: their 0.005 step would round the solved values
+  F('lk1').value = k1; F('lk1V').textContent = k1.toFixed(3);
+  F('lk2').value = k2; F('lk2V').textContent = k2.toFixed(3);
+  if (on !== lens.on) F('lensOff').click();
+  lensMat.uniforms.k1.value = lens.on ? k1 : 0;
+  lensMat.uniforms.k2.value = lens.on ? k2 : 0;
+}
+function applyTheta(t, lensFree){
+  const pos = new THREE.Vector3(t[0], t[1], t[2]), cp = Math.cos(t[4]);
+  const fw = new THREE.Vector3(Math.sin(t[3])*cp, Math.sin(t[4]), -Math.cos(t[3])*cp);
+  // orbit pivot where the view axis meets the floor, else a few metres out
+  const dist = (fw.y < -0.05 && pos.y > 0) ? clamp(-pos.y/fw.y, 1, 15) : 4;
+  camState.pos = pos.toArray();
+  camState.tgt = pos.clone().addScaledVector(fw, dist).toArray();
+  camState.fov = t[6];
+  camState.roll = THREE.MathUtils.radToDeg(t[5]);
+  if (lensFree) setLens(t[7], t[8], true);
+  // OrbitControls re-levels the camera every frame, which would drop the roll
+  orbitWanted = false; camFreeBtn.classList.remove('on'); syncControls();
+  syncCamUI(); pushCamera();
+}
+function solveCalib(){
+  const P = calib.pairs, need = minPairs(), out = F('calErr');
+  if (P.length < need){ out.textContent = 'Need ' + need + ' pairs for these free parameters (have ' + P.length + ').'; return; }
+  const freeFov = F('calFov').checked, freeK1 = F('calK1').checked, freeK2 = F('calK2').checked;
+  const k0 = lens.on ? [lens.k1, lens.k2] : [0, 0];
+  const pose = [0, 1, 2, 3, 4, 5].concat(freeFov ? [6] : []);
+  const all = pose.concat(freeK1 ? [7] : [], freeK2 ? [8] : []);
+  const mc = sceneManifest.camera, pv = pinnedView;
+  const starts = [
+    ['current view',  thetaOf(camState.pos, camState.tgt, camState.fov, camState.roll, k0[0], k0[1])],
+    ['manifest view', thetaOf(mc.position, mc.target, mc.fov, mc.roll, k0[0], k0[1])]
+  ];
+  if (pv) starts.push(['pinned view', thetaOf(pv.position, pv.target, pv.fov, pv.roll, k0[0], k0[1])]);
+  const d = dltInit(P, k0[0], k0[1]);
+  if (d) starts.push(['DLT', d]);
+  let best = null;
+  for (const [name, t0] of starts){
+    if (!freeFov) t0[6] = camState.fov;          // a fixed FOV means the current one
+    let res = levmar(t0, pose, P, 200);          // pose first, lens terms after
+    if (all.length > pose.length) res = levmar(res.t, all, P, 200);
+    if (!best || res.cost < best.cost) best = Object.assign(res, { name });
+  }
+  let worst = 0, wi = 0;
+  for (let i = 0; i < P.length; i++){
+    const e = Math.hypot(best.r[2*i], best.r[2*i+1]);
+    if (e > worst){ worst = e; wi = i; }
+  }
+  const rms = Math.sqrt(best.cost / P.length), t = best.t;
+  calib.prev = { pos: camState.pos.slice(), tgt: camState.tgt.slice(), fov: camState.fov,
+                 roll: camState.roll, k1: lens.k1, k2: lens.k2, lensOn: lens.on };
+  applyTheta(t, freeK1 || freeK2);
+  F('calRevert').disabled = false;
+  out.textContent = 'RMS ' + rms.toFixed(2) + ' px, worst #' + (wi+1) + ' ' + worst.toFixed(1) + ' px  |  fov ' +
+    t[6].toFixed(2) + '°, roll ' + THREE.MathUtils.radToDeg(t[5]).toFixed(2) + '°, k1 ' +
+    t[7].toFixed(3) + ', k2 ' + t[8].toFixed(3) + '  |  best start: ' + best.name + '.' +
+    (rms > 8 ? '  Large error - check the worst pair, or add pairs off the floor plane.' : '') +
+    '  Mouse orbit is now off so the solved roll stays exact.';
+  renderCalibList();
+}
+F('calSolve').onclick = solveCalib;
+F('calRevert').onclick = () => {
+  const p = calib.prev; if (!p) return;
+  camState.pos = p.pos; camState.tgt = p.tgt; camState.fov = p.fov; camState.roll = p.roll;
+  setLens(p.k1, p.k2, p.lensOn);
+  syncCamUI(); pushCamera();
+  calib.prev = null; F('calRevert').disabled = true;
+  F('calErr').textContent = 'Reverted to the camera from before the last solve.';
+  renderCalibList();
+};
+F('calPin').onclick = () => {
+  const d = new Date(), pad = x => String(x).padStart(2, '0');
+  const v = currentView('calib ' + d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
+                        ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()));
+  savedViews.push(v); persistViews(); pinView(v);
+  if (play.cursor >= 0) renderAnalysisFrame(play.cursor);
+  F('calErr').textContent = 'Saved and pinned as "' + v.name + '" - tracking now unprojects through it.';
+};
+
+/* ---------- markers and loupe, drawn after each frame ---------- */
+function calRing(g, p, r, col, dash){
+  g.strokeStyle = col; g.setLineDash(dash ? [3, 3] : []);
+  g.beginPath(); g.arc(p[0], p[1], r, 0, Math.PI*2); g.stroke();
+  g.setLineDash([]);
+}
+function calCross(g, p, r, col){
+  g.strokeStyle = col; g.beginPath();
+  g.moveTo(p[0]-r, p[1]); g.lineTo(p[0]-2, p[1]); g.moveTo(p[0]+2, p[1]); g.lineTo(p[0]+r, p[1]);
+  g.moveTo(p[0], p[1]-r); g.lineTo(p[0], p[1]-2); g.moveTo(p[0], p[1]+2); g.lineTo(p[0], p[1]+r);
+  g.stroke();
+}
+function calTag(g, p, text, col){
+  g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,.75)'; g.strokeText(text, p[0]+7, p[1]-6);
+  g.fillStyle = col; g.fillText(text, p[0]+7, p[1]-6);
+  g.lineWidth = 1.5;
+}
+/* orange ring = world point through the current camera, cyan cross = photo point,
+   red line = the reprojection error between them */
+function paintMarks(g, map){
+  const v = calib.view;
+  const aW = v === 'photo' ? 0.4 : 1, aN = v === '3d' ? 0.4 : 1, aL = v === 'blend' ? 0.9 : 0.35;
+  g.lineWidth = 1.5; g.font = 'bold 11px ui-monospace,Consolas,monospace';
+  calib.pairs.forEach((p, i) => {
+    const sw = worldToScreen(p.w), a = sw && map(sw[0], sw[1]);
+    const sn = imgToScreen(p.n), b = map(sn[0], sn[1]);
+    const sel = i === calib.sel, lbl = String(i+1);
+    if (a){
+      g.globalAlpha = aL; g.strokeStyle = '#ff5a5a';
+      g.beginPath(); g.moveTo(b[0], b[1]); g.lineTo(a[0], a[1]); g.stroke();
+      g.globalAlpha = aW; calRing(g, a, sel ? 7 : 5, '#ff9f43');
+      if (v !== 'photo') calTag(g, a, lbl, '#ff9f43');
+    }
+    g.globalAlpha = aN; calCross(g, b, sel ? 9 : 7, '#36d7ff');
+    if (v !== '3d') calTag(g, b, lbl, '#36d7ff');
+    if (sel){ g.globalAlpha = 1; calRing(g, v === '3d' && a ? a : b, 12, '#ffffff'); }
+  });
+  g.globalAlpha = 1;
+  const pd = calib.pending;
+  if (pd && pd.w){ const s = worldToScreen(pd.w); if (s) calRing(g, map(s[0], s[1]), 8, '#ffe066', true); }
+  if (pd && pd.n){ const s = imgToScreen(pd.n); calCross(g, map(s[0], s[1]), 10, '#ffe066'); }
+  const h = calib.hover;
+  if (h){
+    const s = worldToScreen([h.p.x, h.p.y, h.p.z]);
+    if (s){
+      const q = map(s[0], s[1]);
+      g.strokeStyle = '#5cff9d'; g.beginPath();
+      if (h.snapped){ g.moveTo(q[0], q[1]-6); g.lineTo(q[0]+6, q[1]); g.lineTo(q[0], q[1]+6); g.lineTo(q[0]-6, q[1]); g.closePath(); }
+      else g.arc(q[0], q[1], 3, 0, Math.PI*2);
+      g.stroke();
+    }
+  }
+}
+function drawLoupe(){
+  const m = calib.mouse, L = calLoupe;
+  if (!m || !m.over){ L.style.display = 'none'; return; }
+  const S = L.width, Z = 4, half = S/2/Z;
+  let lx = m.x + 22, ly = m.y - 22 - S;
+  if (lx + S > innerWidth - 4) lx = m.x - 22 - S;
+  if (ly < 4) ly = m.y + 22;
+  L.style.left = lx + 'px'; L.style.top = ly + 'px'; L.style.display = 'block';
+  const g = L.getContext('2d');
+  g.globalAlpha = 1; g.imageSmoothingEnabled = false;
+  g.fillStyle = '#0d0f12'; g.fillRect(0, 0, S, S);
+  if (calib.view !== 'photo'){         // same task as the render, so the WebGL buffer is still intact
+    const dpr = renderer.getPixelRatio();
+    g.drawImage(cvs, (m.x - view.x - half)*dpr, (m.y - view.y - half)*dpr, 2*half*dpr, 2*half*dpr, 0, 0, S, S);
+  }
+  if (calib.view !== '3d' && photoReady()){
+    const kx = photoW()/view.w, ky = photoH()/view.h;
+    g.globalAlpha = CAL_OPACITY[calib.view];
+    g.drawImage(refImg, (m.x - view.x - half)*kx, (m.y - view.y - half)*ky, 2*half*kx, 2*half*ky, 0, 0, S, S);
+    g.globalAlpha = 1;
+  }
+  paintMarks(g, (x, y) => [(x - m.x)*Z + S/2, (y - m.y)*Z + S/2]);
+  g.globalAlpha = 1; g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 1;
+  g.beginPath();
+  g.moveTo(S/2, 0); g.lineTo(S/2, S/2 - 6); g.moveTo(S/2, S/2 + 6); g.lineTo(S/2, S);
+  g.moveTo(0, S/2); g.lineTo(S/2 - 6, S/2); g.moveTo(S/2 + 6, S/2); g.lineTo(S, S/2);
+  g.stroke();
+}
+function calibFrame(){
+  const g = calMarks.getContext('2d');
+  if (!calib.on){
+    if (calib.painted){ g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, calMarks.width, calMarks.height); calib.painted = false; }
+    calLoupe.style.display = 'none';
+    return;
+  }
+  const dpr = devicePixelRatio || 1, W = Math.round(innerWidth*dpr), H = Math.round(innerHeight*dpr);
+  if (calMarks.width !== W || calMarks.height !== H){ calMarks.width = W; calMarks.height = H; }
+  const m = calib.mouse, wantWorld = calib.pending ? !!calib.pending.n : calib.view !== 'photo';
+  calib.hover = (m && m.over && wantWorld && calib.drag < 0)
+    ? pickWorld(m.x, m.y, F('calSnap').checked && !m.shift) : null;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, innerWidth, innerHeight);
+  paintMarks(g, (x, y) => [x, y]);
+  calib.painted = true;
+  drawLoupe();
+  // keep the per-pair errors in step with orbiting and slider edits
+  if (++calib.tickN % 15 === 0){
+    const e = camera.matrixWorld.elements, k = displayK();
+    const sig = e[12] + 3*e[13] + 5*e[14] + 7*e[8] + 11*e[9] + 13*e[10] + 17*e[1] + 19*camera.fov + 23*k[0] + 29*k[1];
+    if (sig !== calib.sig){ calib.sig = sig; renderCalibList(); }
+  }
+}
+
+try {
+  const s = JSON.parse(localStorage.getItem(CAL_KEY) || 'null');
+  if (s && Array.isArray(s.pairs)){
+    calib.pairs = s.pairs.filter(p => Array.isArray(p.w) && p.w.length === 3 && Array.isArray(p.n) && p.n.length === 2);
+    calib.photo = s.photo || '';
+  }
+} catch(e){}
+renderCalibList();
+
+/* ============================ SCENE TOGGLES / EXPORT ============================ */
+F('tglGrid').onclick = e => { grid.visible = !grid.visible; e.target.classList.toggle('on', grid.visible); };
+let wire = false;
+F('tglWire').onclick = e => {
+  wire = !wire; e.target.classList.toggle('on', wire);
+  scene.traverse(o => { if (o.isMesh && o.material && 'wireframe' in o.material) o.material.wireframe = wire; });
+};
+F('tglWalls').onclick = e => { roomGroup.visible = !roomGroup.visible; e.target.classList.toggle('on', roomGroup.visible); };
+F('tglProps').onclick = e => { propsGroup.visible = !propsGroup.visible; e.target.classList.toggle('on', propsGroup.visible); };
+F('dumpBtn').onclick = () => {
+  sceneManifest.camera.position = camState.pos.map(v=>+v.toFixed(4));
+  sceneManifest.camera.target   = camState.tgt.map(v=>+v.toFixed(4));
+  sceneManifest.camera.fov      = +camState.fov.toFixed(3);
+  sceneManifest.camera.roll     = +camState.roll.toFixed(3);
+  sceneManifest.camera.k1       = +lens.k1.toFixed(4);
+  sceneManifest.camera.k2       = +lens.k2.toFixed(4);
+  objectsByName.forEach(g => writeBack(g));
+  const json = JSON.stringify(sceneManifest, null, 2);
+  console.log(json);
+  navigator.clipboard?.writeText(json).then(
+    ()=>alert('manifest printed to console and copied to clipboard'),
+    ()=>alert('manifest printed to console'));
+};
+const panel = document.getElementById('panel');
+document.getElementById('toggle').onclick = () => panel.classList.toggle('hidden');
+
+
+/* ===================== SHARED STATE for analysis + heatmap ===================== */
+const heatmap = { mode:'off', cell:0.15, blur:2, opacity:0.85, gamma:0.60, clip:1.0,
+                  dirty:true, building:false, mesh:null, tex:null, canvas:null,
+                  grid:null, nx:0, nz:0, max:0, unit:'' };
+/* Cells were accumulated against a particular floor and a particular camera.
+   Change either and the old grid is meaningless, so drop it rather than show
+   a heatmap that quietly no longer lines up with the scene. */
+function invalidateHeatmap(reason){
+  if (!heatmap.grid && heatmap.mode === 'off') return;
+  heatmap.grid = null; heatmap.dirty = true;
+  if (heatmap.mesh) heatmap.mesh.visible = false;
+  const el = document.getElementById('hmStatus');
+  if (el && heatmap.mode !== 'off')
+    el.textContent = 'stale - ' + reason + '. Press the mode button again to rebuild.';
+}
+
+/* ============================ ROOM DIMENSIONS ============================ */
+const roomDefaults = { width:R.width, height:R.height, backWallZ:R.backWallZ,
+                       backRoomZ:R.backRoomZ, frontZ:R.frontZ };
+let roomDirty = false;
+function requestRoomRebuild(){
+  if (roomDirty) return;
+  roomDirty = true;
+  requestAnimationFrame(()=>{ roomDirty = false; buildRoom(); applyCeilVisibility();
+    invalidateHeatmap('the room changed'); });
+}
+function bindRoom(id, key, fmt){
+  const el = F(id), out = F(id+'V');
+  el.value = R[key]; out.textContent = fmt(R[key]);
+  el.addEventListener('input', ()=>{
+    let v = +el.value;
+    // keep the room a valid box: front edge in front of the rear wall, etc.
+    if (key === 'frontZ')    v = Math.max(v, R.backWallZ + 0.5);
+    if (key === 'backWallZ') v = Math.min(Math.max(v, R.backRoomZ + 0.3), R.frontZ - 0.5);
+    if (key === 'backRoomZ') v = Math.min(v, R.backWallZ - 0.3);
+    R[key] = v; out.textContent = fmt(v);
+    requestRoomRebuild();
+  });
+}
+bindRoom('rHeight','height',  v=>v.toFixed(2)+' m');
+bindRoom('rWidth','width',    v=>v.toFixed(2)+' m');
+bindRoom('rBackZ','backWallZ',v=>v.toFixed(2));
+bindRoom('rRoomZ','backRoomZ',v=>v.toFixed(2));
+bindRoom('rFrontZ','frontZ',  v=>v.toFixed(2));
+function syncRoomUI(){
+  ['rHeight','rWidth','rBackZ','rRoomZ','rFrontZ'].forEach((id,i)=>{
+    const key = ['height','width','backWallZ','backRoomZ','frontZ'][i];
+    F(id).value = R[key]; F(id+'V').textContent = R[key].toFixed(2) + (i<2?' m':'');
+  });
+}
+F('rReset').onclick = ()=>{
+  Object.assign(R, roomDefaults);
+  syncRoomUI();
+  requestRoomRebuild();
+};
+let ceilVisible = true;
+function applyCeilVisibility(){
+  const c = roomGroup.getObjectByName('ceilingPlane');
+  if (c) c.visible = ceilVisible;
+}
+F('tglCeil').onclick = e => { ceilVisible = !ceilVisible; e.target.classList.toggle('on', ceilVisible); applyCeilVisibility(); };
+
+/* ============================ SAVED VIEWS ============================ */
+/* A view is everything needed to reproduce a viewpoint, lens included. The
+   PINNED view is what the tracking data is unprojected through, so orbiting
+   around to inspect the reconstruction never moves it.                      */
+const VIEW_KEY = 'bakery.savedViews';
+const calibCam = new THREE.PerspectiveCamera(sceneManifest.camera.fov, REF_ASPECT, 0.05, 120);
+let pinnedView = null;
+
+function currentView(name){
+  return { name: name || ('view ' + (savedViews.length+1)),
+    position: camera.position.toArray().map(v=>+v.toFixed(4)),
+    target:   controls.target.toArray().map(v=>+v.toFixed(4)),
+    fov: +camera.fov.toFixed(3), roll: +camState.roll.toFixed(3),
+    k1: +lens.k1.toFixed(4), k2: +lens.k2.toFixed(4) };
+}
+function manifestView(){
+  const c = sceneManifest.camera;
+  return { name:'CCTV (manifest)', position:c.position.slice(), target:c.target.slice(),
+           fov:c.fov, roll:c.roll||0, k1:c.k1||0, k2:c.k2||0 };
+}
+let savedViews = [];
+try { savedViews = JSON.parse(localStorage.getItem(VIEW_KEY) || '[]') || []; } catch(e){ savedViews = []; }
+function persistViews(){
+  try { localStorage.setItem(VIEW_KEY, JSON.stringify(savedViews)); } catch(e){}
+}
+function renderViews(){
+  const sel = F('viewList'); const keep = sel.value;
+  sel.innerHTML = '';
+  savedViews.forEach((v,i)=>{
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = (pinnedView && pinnedView.name === v.name ? '\u25c9 ' : '') +
+                    v.name + '  (fov ' + v.fov.toFixed(0) + ')';
+    sel.appendChild(o);
+  });
+  if (keep) sel.value = keep;
+  F('viewPinned').textContent = 'pinned: ' + (pinnedView ? pinnedView.name : 'none');
+}
+function applyView(v){
+  camState.pos = v.position.slice(); camState.tgt = v.target.slice();
+  camState.fov = v.fov; camState.roll = v.roll || 0;
+  lens.k1 = v.k1 || 0; lens.k2 = v.k2 || 0;
+  F('lk1').value = lens.k1; F('lk1').dispatchEvent(new Event('input'));
+  F('lk2').value = lens.k2; F('lk2').dispatchEvent(new Event('input'));
+  syncCamUI(); pushCamera();
+}
+function pinView(v){
+  pinnedView = v;
+  calibCam.position.fromArray(v.position);
+  calibCam.fov = v.fov; calibCam.aspect = REF_ASPECT;
+  calibCam.up.set(0,1,0);
+  calibCam.lookAt(v.target[0], v.target[1], v.target[2]);
+  if (v.roll) calibCam.rotateZ(THREE.MathUtils.degToRad(v.roll));
+  calibCam.updateProjectionMatrix();
+  calibCam.updateMatrixWorld(true);
+  calibLens.k1 = v.k1 || 0; calibLens.k2 = v.k2 || 0;
+  invalidateHeatmap('the pinned view changed');
+  renderViews();
+}
+const calibLens = { k1:0, k2:0 };
+pinView(manifestView());
+renderViews();
+
+F('viewSave').onclick = ()=>{
+  const nm = (F('viewName').value || '').trim();
+  const v = currentView(nm);
+  const at = savedViews.findIndex(x => x.name === v.name);
+  if (at >= 0) savedViews[at] = v; else savedViews.push(v);
+  F('viewName').value = '';
+  persistViews(); renderViews();
+};
+function selectedView(){
+  const i = +F('viewList').value;
+  return Number.isFinite(i) ? savedViews[i] : null;
+}
+F('viewLoad').onclick = ()=>{ const v = selectedView(); if (v) applyView(v); };
+F('viewPin').onclick  = ()=>{
+  const v = selectedView(); if (!v) return;
+  pinView(v);
+  if (play.cursor >= 0) renderAnalysisFrame(play.cursor);   // re-solve at the new view
+};
+F('viewDel').onclick  = ()=>{
+  const i = +F('viewList').value;
+  if (!Number.isFinite(i) || !savedViews[i]) return;
+  savedViews.splice(i,1); persistViews(); renderViews();
+};
+F('viewExport').onclick = ()=>{
+  const blob = new Blob([JSON.stringify(savedViews, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'bakery_views.json'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+};
+F('viewImport').onclick = ()=> F('viewFile').click();
+F('viewFile').onchange = (e)=>{
+  const f = e.target.files[0]; if (!f) return;
+  f.text().then(txt=>{
+    const arr = JSON.parse(txt);
+    if (!Array.isArray(arr)) throw new Error('expected an array of views');
+    savedViews = arr; persistViews(); renderViews();
+  }).catch(err => alert('import failed: ' + err.message));
+};
+
+/* ============================ LAYOUT FILE ============================
+   Camera, room shell and furniture placement in one JSON file. The camera
+   written is the PINNED view - the one tracking is unprojected through - so
+   orbiting away before saving does not change what gets stored.           */
+const LAYOUT_VERSION = 1;
+const ROOM_KEYS = ['width','height','backWallZ','backRoomZ','frontZ'];
+const r4 = v => +(+v).toFixed(4);
+const isVec3 = a => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
+
+function layoutJSON(){
+  const v = pinnedView || manifestView();
+  const room = {};
+  ROOM_KEYS.forEach(k => { room[k] = r4(R[k]); });
+  room.doorway = { x:r4(R.doorway.x), width:r4(R.doorway.width), height:r4(R.doorway.height) };
+  return {
+    version: LAYOUT_VERSION,
+    camera: { position:v.position.map(r4), target:v.target.map(r4), fov:r4(v.fov),
+              roll:r4(v.roll || 0), k1:r4(v.k1 || 0), k2:r4(v.k2 || 0) },
+    room,
+    objects: [...objectsByName.values()].map(g => {
+      writeBack(g);
+      const d = g.userData.def;
+      return { name:d.name, position:d.position, rotation:d.rotation, scale:d.scale,
+               dimensions:d.dimensions.map(r4) };
+    })
+  };
+}
+
+/* Everything is checked before anything is touched, so a bad file cannot
+   leave the scene half-applied. */
+function checkLayout(L){
+  if (!L || typeof L !== 'object' || Array.isArray(L)) throw new Error('not a layout object');
+  const c = L.camera;
+  if (c && (!isVec3(c.position) || !isVec3(c.target) || !Number.isFinite(c.fov)))
+    throw new Error('camera needs position [x,y,z], target [x,y,z] and fov');
+  const rm = L.room;
+  if (rm){
+    for (const k of ROOM_KEYS)
+      if (k in rm && !Number.isFinite(rm[k])) throw new Error('room.' + k + ' is not a number');
+    const b = rm.backRoomZ ?? R.backRoomZ, w = rm.backWallZ ?? R.backWallZ, f = rm.frontZ ?? R.frontZ;
+    if (!(b < w && w < f)) throw new Error('room needs backRoomZ < backWallZ < frontZ');
+    if (rm.doorway && !['x','width','height'].every(k => Number.isFinite(rm.doorway[k])))
+      throw new Error('room.doorway needs x, width and height');
+  }
+  if (L.objects !== undefined && !Array.isArray(L.objects)) throw new Error('objects must be an array');
+  for (const o of L.objects || []){
+    for (const k of ['position','rotation','scale','dimensions'])
+      if (o[k] !== undefined && !isVec3(o[k])) throw new Error((o.name || '?') + '.' + k + ' must be [x,y,z]');
+  }
+}
+
+function applyLayout(L){
+  checkLayout(L);
+  const c = L.camera, rm = L.room, skipped = [];
+  let placed = 0;
+  if (c){
+    Object.assign(sceneManifest.camera, { position:c.position.slice(), target:c.target.slice(),
+      fov:c.fov, roll:+c.roll || 0, k1:+c.k1 || 0, k2:+c.k2 || 0 });
+    const v = manifestView();
+    applyView(v); pinView(v);
+  }
+  if (rm){
+    ROOM_KEYS.forEach(k => { if (k in rm) R[k] = rm[k]; });
+    if (rm.doorway) Object.assign(R.doorway, { x:rm.doorway.x, width:rm.doorway.width, height:rm.doorway.height });
+    syncRoomUI(); requestRoomRebuild();
+  }
+  for (const o of L.objects || []){
+    const g = objectsByName.get(o.name);
+    if (!g){ skipped.push(o.name); continue; }
+    const d = g.userData.def;
+    if (o.position) d.position = o.position.slice();
+    if (o.rotation) d.rotation = o.rotation.slice();
+    if (o.scale)    d.scale    = o.scale.slice();
+    const resized = o.dimensions && o.dimensions.some((v,i) => Math.abs(v - d.dimensions[i]) > 1e-6);
+    if (o.dimensions) d.dimensions = o.dimensions.slice();
+    if (resized) rebuild(d);
+    else {
+      g.position.fromArray(d.position);
+      g.rotation.set(d.rotation[0], d.rotation[1], d.rotation[2]);
+      g.scale.fromArray(d.scale || [1,1,1]);
+    }
+    placed++;
+  }
+  // a rebuilt object is a new group: re-attach the gizmo and re-apply isolate
+  if (selected) selectByName(selected.name);
+  if (isolated) propsGroup.children.forEach(ch => ch.visible = ch === selected);
+  if (play.cursor >= 0) renderAnalysisFrame(play.cursor);
+  return { placed, skipped };
+}
+
+F('layoutSave').onclick = ()=>{
+  const blob = new Blob([JSON.stringify(layoutJSON(), null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'bakery_layout.json'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+  F('layoutStatus').textContent = 'Saved camera "' + (pinnedView ? pinnedView.name : 'manifest') +
+    '", room and ' + objectsByName.size + ' objects to bakery_layout.json.';
+};
+F('layoutLoad').onclick = ()=> F('layoutFile').click();
+F('layoutFile').onchange = (e)=>{
+  const f = e.target.files[0]; if (!f) return;
+  e.target.value = '';                     // allow re-loading the same file
+  f.text().then(txt => {
+    const r = applyLayout(JSON.parse(txt));
+    F('layoutStatus').textContent = 'Loaded ' + f.name + ': camera pinned, room set, ' + r.placed +
+      ' objects placed' + (r.skipped.length ? ', unknown skipped: ' + r.skipped.join(', ') : '') + '.';
+  }).catch(err => { F('layoutStatus').textContent = 'Load failed: ' + err.message; });
+};
+
+/* ============================ TRACKING DATA ============================
+   The exports are hundreds of megabytes - far past the ~512 MB cap on a single
+   JS string, so JSON.parse on the whole file is not an option. The file is read
+   as a stream and each frame object inside "frames" is parsed on its own, then
+   compacted into typed arrays and released.                                  */
+const KP_ORDER = ['nose','left_eye','right_eye','left_ear','right_ear',
+  'left_shoulder','right_shoulder','left_elbow','right_elbow','left_wrist','right_wrist',
+  'left_hip','right_hip','left_knee','right_knee','left_ankle','right_ankle'];
+const BONES = [[3,1],[1,0],[0,2],[2,4],[0,5],[0,6],[5,6],[5,7],[7,9],[6,8],[8,10],
+               [5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
+const NOSE=0, L_SH=5, R_SH=6, L_HIP=11, R_HIP=12;
+
+const analysis = { frames:[], times:null, fps:30, duration:0, videoW:1920, videoH:1080,
+                   ids:[], name:'', loaded:false, personFrames:0 };
+
+function matchBrace(str, start){
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < str.length; i++){
+    const c = str[i];
+    if (inStr){
+      if (esc) esc = false;
+      else if (c === String.fromCharCode(92)) esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === '{') depth++;
+    else if (c === '}'){ depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+function compactFrame(f, keepKp, ids){
+  const t = Number.isFinite(f.time) ? f.time : (Number(f.frame)||0) / analysis.fps;
+  const ps = f.persons;
+  if (!ps || !ps.length) return { t, p:null };
+  const out = [];
+  for (let i = 0; i < ps.length; i++){
+    const p = ps[i];
+    const g = p.ground_point;
+    if (!Array.isArray(g) || g.length < 2) continue;
+    const id = (p.global_id !== undefined && p.global_id !== null) ? p.global_id : p.track_id;
+    ids.add(id);
+    const rec = { id, gx:+g[0], gy:+g[1], k:null, h:null };
+    if (keepKp && Array.isArray(p.keypoints)){
+      // flat [x0,y0,c0, x1,y1,c1, ...] in KP_ORDER, as make_analysis.py writes it
+      if (p.keypoints.length >= KP_ORDER.length * 3)
+        rec.k = Float32Array.from(p.keypoints.slice(0, KP_ORDER.length * 3));
+    } else if (keepKp && p.keypoints){
+      const arr = new Float32Array(KP_ORDER.length * 3);
+      for (let j = 0; j < KP_ORDER.length; j++){
+        const k = p.keypoints[KP_ORDER[j]];
+        if (k){ arr[j*3] = k.x; arr[j*3+1] = k.y; arr[j*3+2] = Number.isFinite(k.conf) ? k.conf : 1; }
+        else arr[j*3+2] = -1;
+      }
+      rec.k = arr;
+    }
+    const hd = p.head;
+    if (hd && Array.isArray(hd.origin) && Array.isArray(hd.direction))
+      rec.h = [hd.origin[0], hd.origin[1], hd.direction[0], hd.direction[1]];
+    out.push(rec);
+  }
+  return { t, p: out.length ? out : null };
+}
+
+async function streamAnalysis(file, stride, keepKp, onProgress){
+  let buf = '', pos = 0, readBytes = 0, eof = false;
+  const total = file.size || 1;
+  // progress counts the bytes read from disk, before any decompression
+  let stream = file.stream().pipeThrough(new TransformStream({
+    transform(chunk, ctl){ readBytes += chunk.byteLength; ctl.enqueue(chunk); }
+  }));
+  // gzip is detected by its magic bytes, not the file extension
+  const magic = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+  if (magic[0] === 0x1f && magic[1] === 0x8b) stream = stream.pipeThrough(new DecompressionStream('gzip'));
+  const reader = stream.getReader();
+  const dec = new TextDecoder('utf-8');
+  async function pump(){
+    if (eof) return false;
+    const r = await reader.read();
+    if (r.done){ eof = true; buf += dec.decode(); return false; }
+    buf += dec.decode(r.value, { stream:true });
+    return true;
+  }
+  // --- header: everything before "frames" tells us the video geometry ---
+  let headerEnd = -1;
+  while (headerEnd < 0){
+    const i = buf.indexOf('"frames"');
+    if (i >= 0){
+      const j = buf.indexOf('[', i);
+      if (j >= 0){ headerEnd = i; pos = j + 1; break; }
+    }
+    if (!await pump()) throw new Error('no "frames" array in this JSON');
+  }
+  const head = buf.slice(0, headerEnd);
+  const num = (key, dflt) => {                 // no regex: avoids escaping games
+    const i = head.indexOf('"' + key + '"');
+    if (i < 0) return dflt;
+    const j = head.indexOf(':', i);
+    if (j < 0) return dflt;
+    const v = parseFloat(head.slice(j + 1, j + 40));
+    return Number.isFinite(v) ? v : dflt;
+  };
+  analysis.fps    = num('fps', 30) || 30;
+  analysis.videoW = num('width', 1920);
+  analysis.videoH = num('height', 1080);
+  const declaredDur = num('duration_sec', 0);
+
+  const frames = [], ids = new Set();
+  let seen = 0, personFrames = 0;
+  while (true){
+    while (pos < buf.length){
+      const c = buf.charCodeAt(pos);
+      if (c === 32 || c === 10 || c === 13 || c === 9 || c === 44) pos++; else break;
+    }
+    if (pos >= buf.length){ if (!await pump()) break; continue; }
+    if (buf[pos] === ']') break;
+    if (buf[pos] !== '{'){ pos++; continue; }
+    let end = matchBrace(buf, pos);
+    while (end < 0){ if (!await pump()) break; end = matchBrace(buf, pos); }
+    if (end < 0) break;
+    const keep = (seen % stride) === 0;
+    if (keep){
+      const fr = compactFrame(JSON.parse(buf.slice(pos, end + 1)), keepKp, ids);
+      if (fr.p) personFrames += fr.p.length;
+      frames.push(fr);
+    }
+    pos = end + 1;
+    seen++;
+    if (pos > (1 << 20)){ buf = buf.slice(pos); pos = 0; }
+    if ((seen & 2047) === 0){
+      onProgress(readBytes / total, frames.length, seen);
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  try { reader.cancel(); } catch(e){}
+
+  analysis.frames = frames;
+  analysis.times  = new Float64Array(frames.length);
+  for (let i = 0; i < frames.length; i++) analysis.times[i] = frames[i].t;
+  analysis.duration = declaredDur > 0 ? declaredDur
+                    : (frames.length ? frames[frames.length-1].t : 0);
+  analysis.ids = [...ids].sort((a,b)=>a-b);
+  analysis.name = file.name;
+  analysis.personFrames = personFrames;
+  analysis.loaded = frames.length > 0;
+  onProgress(1, frames.length, seen);
+  return analysis;
+}
+
+function frameIndexAt(t){
+  const T = analysis.times;
+  if (!T || !T.length) return -1;
+  if (t <= T[0]) return 0;
+  if (t >= T[T.length-1]) return T.length - 1;
+  let lo = 0, hi = T.length - 1;
+  while (lo < hi){ const mid = (lo + hi + 1) >> 1; if (T[mid] <= t) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+
+/* ============================ IMAGE -> WORLD ============================
+   Same chain as the editor: video pixel -> normalised frame position -> the
+   distorted screen point the CCTV lens would have produced -> undistorted NDC
+   -> a ray from the PINNED camera -> the floor (or the body plane).         */
+const _ndcV = new THREE.Vector3(), _ray = new THREE.Ray(), _rayD = new THREE.Vector3();
+const _gp = new THREE.Vector3(), _jt = new THREE.Vector3(), _tmp = new THREE.Vector3();
+const groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+const bodyPlane = new THREE.Plane(), levelPlane = new THREE.Plane();
+const UP = new THREE.Vector3(0,1,0);
+
+function calibWarp(nx, ny){
+  const dx = nx * REF_ASPECT, dy = ny;
+  const r2 = dx*dx + dy*dy;
+  const s = 1 + calibLens.k1*r2 + calibLens.k2*r2*r2;
+  return [nx*s, ny*s];
+}
+function pixelRay(px, py){
+  const w = calibWarp((px / analysis.videoW) * 2 - 1, -((py / analysis.videoH) * 2 - 1));
+  _ndcV.set(w[0], w[1], 0.5).unproject(calibCam);
+  _rayD.copy(_ndcV).sub(calibCam.position).normalize();
+  _ray.set(calibCam.position, _rayD);
+  return _ray;
+}
+function groundFromPixel(px, py, out){
+  return pixelRay(px, py).intersectPlane(groundPlane, out);
+}
+/* vertical plane through the foot point, facing the camera - joints land on it
+   at their true heights, which is what makes the skeleton metric. */
+function setBodyPlane(ground){
+  _tmp.copy(calibCam.position).sub(ground); _tmp.y = 0;
+  if (_tmp.lengthSq() < 1e-9) _tmp.set(0,0,1);
+  _tmp.normalize();
+  bodyPlane.setFromNormalAndCoplanarPoint(_tmp, ground);
+}
+
+/* ============================ POSE VISUALS ============================ */
+const posesGroup = new THREE.Group(); posesGroup.name = 'poses'; scene.add(posesGroup);
+const poseViz = new Map();
+const TRAIL_LEN = 120;
+const play = { on:false, t:0, speed:1, cursor:-1, last:0,
+               trails:false, gaze:false, labels:false, norm:false, height:1.70 };
+
+function idColor(id){
+  return new THREE.Color().setHSL(((id * 47) % 360) / 360, 0.72, 0.60);
+}
+function makeLabel(id, col){
+  const cv = document.createElement('canvas'); cv.width = 128; cv.height = 64;
+  const g = cv.getContext('2d');
+  g.fillStyle = 'rgba(10,12,16,0.78)'; g.fillRect(0,0,128,64);
+  g.strokeStyle = '#' + col.getHexString(); g.lineWidth = 4; g.strokeRect(2,2,124,60);
+  g.fillStyle = '#fff'; g.font = 'bold 38px monospace'; g.textAlign = 'center';
+  g.fillText('#' + id, 64, 46);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(cv), depthTest:false, transparent:true }));
+  sp.scale.set(0.34, 0.17, 1); sp.renderOrder = 999;
+  return sp;
+}
+function getViz(id){
+  let v = poseViz.get(id);
+  if (v) return v;
+  const col = idColor(id);
+  const g = new THREE.Group(); g.name = 'track-' + id;
+
+  const boneGeo = new THREE.BufferGeometry();
+  boneGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(BONES.length*6), 3));
+  boneGeo.setDrawRange(0,0);
+  const bones = new THREE.LineSegments(boneGeo, new THREE.LineBasicMaterial({ color: col }));
+  bones.frustumCulled = false; g.add(bones);
+
+  const joints = new THREE.InstancedMesh(new THREE.SphereGeometry(0.035, 8, 6),
+    new THREE.MeshBasicMaterial({ color: col }), KP_ORDER.length);
+  joints.frustumCulled = false; joints.count = 0; g.add(joints);
+
+  const foot = new THREE.Mesh(new THREE.RingGeometry(0.14, 0.20, 20),
+    new THREE.MeshBasicMaterial({ color: col, transparent:true, opacity:0.85,
+      side:THREE.DoubleSide, depthWrite:false }));
+  foot.rotation.x = -Math.PI/2; foot.renderOrder = 5; g.add(foot);   // above the heatmap
+  foot.position.y = 0.03;
+
+  const trailGeo = new THREE.BufferGeometry();
+  trailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_LEN*3), 3));
+  trailGeo.setDrawRange(0,0);
+  const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({
+    color: col, transparent:true, opacity:0.55, depthWrite:false }));
+  trail.frustumCulled = false; trail.renderOrder = 6; posesGroup.add(trail);
+
+  const gazeGeo = new THREE.BufferGeometry();
+  gazeGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+  const gaze = new THREE.Line(gazeGeo, new THREE.LineBasicMaterial({ color: 0xfbbf24 }));
+  gaze.frustumCulled = false; g.add(gaze);
+
+  const label = makeLabel(id, col); g.add(label);
+  posesGroup.add(g);
+  v = { id, group:g, bones, joints, foot, trail, gaze, label,
+        trailBuf:trailGeo.attributes.position, trailN:0, seen:-1 };
+  poseViz.set(id, v);
+  return v;
+}
+const _m4 = new THREE.Matrix4();
+
+function renderAnalysisFrame(index){
+  const fr = analysis.frames[index];
+  if (!fr) return;
+  const persons = fr.p;
+  if (persons){
+    for (let i = 0; i < persons.length; i++){
+      const p = persons[i];
+      if (!groundFromPixel(p.gx, p.gy, _gp)) continue;
+      const v = getViz(p.id);
+      v.seen = index;
+      v.group.visible = true;
+      v.foot.position.set(_gp.x, 0.03, _gp.z);
+
+      let drawn = 0, topY = 0;
+      const pos = v.bones.geometry.attributes.position;
+      if (p.k){
+        setBodyPlane(_gp);
+        const pts = [];
+        for (let j = 0; j < KP_ORDER.length; j++){
+          if (p.k[j*3+2] < 0.12){ pts.push(null); continue; }
+          if (!pixelRay(p.k[j*3], p.k[j*3+1]).intersectPlane(bodyPlane, _jt)){ pts.push(null); continue; }
+          pts.push(_jt.clone());
+          if (_jt.y > topY) topY = _jt.y;
+        }
+        // optional height normalisation: rescale about the foot point so an
+        // imperfect floor calibration cannot stretch people out of proportion
+        if (play.norm && topY > 0.3){
+          const k = play.height / topY;
+          for (const q of pts) if (q) q.sub(_gp).multiplyScalar(k).add(_gp);
+        }
+        let n = 0;
+        for (let b = 0; b < BONES.length; b++){
+          const a = pts[BONES[b][0]], c = pts[BONES[b][1]];
+          if (!a || !c) continue;
+          pos.setXYZ(n*2,   a.x, a.y, a.z);
+          pos.setXYZ(n*2+1, c.x, c.y, c.z);
+          n++;
+        }
+        pos.needsUpdate = true;
+        v.bones.geometry.setDrawRange(0, n*2);
+        drawn = n;
+        let ji = 0;
+        for (const q of pts){
+          if (!q) continue;
+          _m4.makeTranslation(q.x, q.y, q.z);
+          v.joints.setMatrixAt(ji++, _m4);
+        }
+        v.joints.count = ji;
+        v.joints.instanceMatrix.needsUpdate = true;
+
+        let gazeOK = false;
+        if (play.gaze && p.h && pts[NOSE]){
+          const head = pts[NOSE];
+          levelPlane.setFromNormalAndCoplanarPoint(UP, head);
+          if (pixelRay(p.h[0] + p.h[2]*40, p.h[1] + p.h[3]*40).intersectPlane(levelPlane, _tmp)){
+            _tmp.sub(head); _tmp.y = 0;
+            if (_tmp.lengthSq() > 1e-8){
+              _tmp.normalize().multiplyScalar(1.2).add(head);
+              const gz = v.gaze.geometry.attributes.position;
+              gz.setXYZ(0, head.x, head.y, head.z);
+              gz.setXYZ(1, _tmp.x, _tmp.y, _tmp.z);
+              gz.needsUpdate = true; gazeOK = true;
+            }
+          }
+        }
+        v.gaze.visible = gazeOK;
+      } else {
+        v.bones.geometry.setDrawRange(0,0);
+        v.joints.count = 0; v.gaze.visible = false;
+      }
+      v.bones.visible = drawn > 0;
+      v.joints.visible = drawn > 0;
+
+      v.label.visible = play.labels;
+      v.label.position.set(_gp.x, (play.norm ? play.height : Math.max(topY, 1.0)) + 0.22, _gp.z);
+      if (play.trails){
+        const b = v.trailBuf;
+        if (v.trailN < TRAIL_LEN){ b.setXYZ(v.trailN, _gp.x, 0.035, _gp.z); v.trailN++; }
+        else {
+          for (let q = 0; q < TRAIL_LEN-1; q++) b.setXYZ(q, b.getX(q+1), b.getY(q+1), b.getZ(q+1));
+          b.setXYZ(TRAIL_LEN-1, _gp.x, 0.035, _gp.z);
+        }
+        b.needsUpdate = true;
+        v.trail.geometry.setDrawRange(0, v.trailN);
+        v.trail.visible = true;
+      } else { v.trail.visible = false; v.trailN = 0; }
+    }
+  }
+  poseViz.forEach(v => { if (v.seen !== index){ v.group.visible = false; v.trail.visible = false; } });
+}
+function clearPoses(){
+  poseViz.forEach(v => {
+    posesGroup.remove(v.group); posesGroup.remove(v.trail);
+    v.group.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    v.trail.geometry.dispose();
+  });
+  poseViz.clear();
+}
+
+/* ============================ PLAYBACK UI ============================ */
+function fmtTime(t){
+  t = Math.max(0, t|0);
+  const h = (t/3600)|0, m = ((t%3600)/60)|0, s = t%60;
+  return (h ? h + ':' + String(m).padStart(2,'0') : String(m)) + ':' + String(s).padStart(2,'0');
+}
+function setPlay(on){
+  play.on = on && analysis.loaded;
+  play.last = performance.now();
+  F('anPlay').innerHTML = play.on ? '&#10073;&#10073; pause' : '&#9654; play';
+  F('anPlay').classList.toggle('on', play.on);
+}
+function seekTo(t, force){
+  play.t = Math.max(0, Math.min(analysis.duration || 0, t));
+  const i = frameIndexAt(play.t);
+  if (i >= 0 && (i !== play.cursor || force)){
+    play.cursor = i;
+    renderAnalysisFrame(i);
+  }
+  const sk = F('anSeek');
+  if (document.activeElement !== sk) sk.value = String(play.t);
+  F('anTime').textContent = fmtTime(play.t) + ' / ' + fmtTime(analysis.duration);
+}
+function stepFrames(d){
+  const i = Math.max(0, Math.min(analysis.frames.length-1, frameIndexAt(play.t) + d));
+  if (analysis.times && analysis.times.length) seekTo(analysis.times[i], true);
+}
+F('anPlay').onclick = ()=> setPlay(!play.on);
+F('anBack').onclick = ()=> stepFrames(-1);
+F('anFwd').onclick  = ()=> stepFrames(1);
+F('anSeek').addEventListener('input', e => seekTo(+e.target.value, true));
+document.querySelectorAll('.speed-row button').forEach(b => {
+  b.onclick = ()=>{
+    play.speed = +b.dataset.speed;
+    document.querySelectorAll('.speed-row button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+  };
+});
+bindRange('anScale', v=>v.toFixed(2), v=>{ play.height = v; });
+function toggleBtn(id, key, after){
+  F(id).onclick = e => {
+    play[key] = !play[key];
+    e.target.classList.toggle('on', play[key]);
+    if (after) after();
+    if (play.cursor >= 0) renderAnalysisFrame(play.cursor);
+  };
+}
+toggleBtn('anTrails','trails', ()=>{ poseViz.forEach(v => { v.trailN = 0; }); });
+toggleBtn('anGaze','gaze');
+toggleBtn('anLabels','labels');
+toggleBtn('anNorm','norm');
+
+F('anLoad').onclick = ()=> F('anFile').click();
+F('anClear').onclick = ()=>{
+  clearPoses(); setPlay(false);
+  analysis.frames = []; analysis.times = null; analysis.loaded = false;
+  analysis.duration = 0; analysis.ids = [];
+  play.cursor = -1; play.t = 0;
+  F('anStatus').textContent = 'Cleared.';
+  F('anBarFill').style.width = '0';
+  setHeatmapMode('off');
+};
+F('anFile').onchange = async (e)=>{
+  const f = e.target.files[0]; if (!f) return;
+  const stride = Math.max(1, Math.min(60, +F('anStride').value || 1));
+  const keepKp = F('anKp').checked;
+  clearPoses(); setPlay(false);
+  F('anStatus').textContent = 'reading ' + f.name + ' (' + (f.size/1048576).toFixed(0) + ' MB)…';
+  try {
+    await streamAnalysis(f, stride, keepKp, (frac, kept, seen)=>{
+      F('anBarFill').style.width = (frac*100).toFixed(1) + '%';
+      F('anStatus').textContent = (frac*100).toFixed(0) + '%  kept ' + kept +
+        ' / scanned ' + seen + ' frames';
+    });
+    F('anSeek').min = 0; F('anSeek').max = String(analysis.duration || 1);
+    F('anSeek').step = String(Math.max(0.001, (analysis.duration||1)/2000));
+    F('anStatus').textContent = analysis.name + ' — ' + analysis.frames.length +
+      ' frames, ' + analysis.ids.length + ' tracks, ' +
+      analysis.personFrames + ' detections, video ' +
+      analysis.videoW + '×' + analysis.videoH + ' @ ' + analysis.fps.toFixed(0) + ' fps';
+    heatmap.dirty = true;
+    seekTo(0, true);
+  } catch(err){
+    F('anStatus').textContent = 'load failed: ' + err.message;
+  }
+};
+
+/* advanced from the render loop, so playback follows real elapsed time */
+function tickPlayback(now){
+  if (!play.on) return;
+  const dt = Math.min(0.25, (now - play.last)/1000);
+  play.last = now;
+  let t = play.t + dt * play.speed;
+  if (t >= analysis.duration){ t = 0; }        // loop
+  seekTo(t, false);
+}
+
+/* ============================ FLOOR HEATMAP ============================
+   Two measures, both accumulated on the same floor grid:
+     unique visitors - how many DISTINCT track ids ever stood in a cell
+     dwell time      - total seconds people spent in a cell
+   Ground points are unprojected through the pinned view, so the heatmap and
+   the pose playback always agree about where the floor is.                  */
+function heatBounds(){
+  return { x0:-R.width/2, x1:R.width/2, z0:Math.min(floorZ0,floorZ1), z1:Math.max(floorZ0,floorZ1) };
+}
+function turbo(t){
+  t = Math.max(0, Math.min(1, t));
+  const r = Math.round(255*Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 3))));
+  const g = Math.round(255*Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 2))));
+  const b = Math.round(255*Math.max(0, Math.min(1, 1.5 - Math.abs(4*t - 1))));
+  return [r,g,b];
+}
+async function buildHeatmap(mode){
+  if (!analysis.loaded){ F('hmStatus').textContent = 'Load a tracking JSON first.'; return; }
+  if (heatmap.building) return;
+  heatmap.building = true;
+  const B = heatBounds();
+  const nx = Math.max(2, Math.ceil((B.x1-B.x0)/heatmap.cell));
+  const nz = Math.max(2, Math.ceil((B.z1-B.z0)/heatmap.cell));
+  const grid = new Float32Array(nx*nz);
+  const sets = (mode === 'unique') ? new Array(nx*nz) : null;
+  const T = analysis.times, N = analysis.frames.length;
+  let outside = 0, placed = 0;
+
+  for (let i = 0; i < N; i++){
+    const fr = analysis.frames[i];
+    if (fr.p){
+      const dt = (mode === 'dwell')
+        ? Math.min(1.0, (i+1 < N ? T[i+1]-T[i] : 1/analysis.fps)) : 0;
+      for (let j = 0; j < fr.p.length; j++){
+        const p = fr.p[j];
+        if (!groundFromPixel(p.gx, p.gy, _gp)){ outside++; continue; }
+        const cx = Math.floor((_gp.x - B.x0)/heatmap.cell);
+        const cz = Math.floor((_gp.z - B.z0)/heatmap.cell);
+        if (cx < 0 || cz < 0 || cx >= nx || cz >= nz){ outside++; continue; }
+        const idx = cz*nx + cx;
+        placed++;
+        if (mode === 'dwell') grid[idx] += dt;
+        else {
+          let s = sets[idx];
+          if (!s) s = sets[idx] = new Set();
+          if (!s.has(p.id)){ s.add(p.id); grid[idx] += 1; }
+        }
+      }
+    }
+    if ((i & 1023) === 0){
+      F('hmStatus').textContent = 'building ' + mode + '… ' + ((i/N)*100).toFixed(0) + '%';
+      F('anBarFill').style.width = ((i/N)*100).toFixed(1) + '%';
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+  heatmap.grid = grid; heatmap.nx = nx; heatmap.nz = nz;
+  heatmap.unit = (mode === 'dwell') ? 's' : ' visitors';
+  let mx = 0; for (let i = 0; i < grid.length; i++) if (grid[i] > mx) mx = grid[i];
+  heatmap.max = mx;
+  heatmap.building = false;
+  heatmap.dirty = false;
+  F('anBarFill').style.width = '0';
+  F('hmStatus').textContent = mode + ': ' + nx + '×' + nz + ' cells @ ' +
+    heatmap.cell.toFixed(2) + ' m, peak ' + mx.toFixed(mode==='dwell'?1:0) + heatmap.unit +
+    ', ' + placed + ' points on the floor' + (outside ? ', ' + outside + ' off-grid' : '');
+  paintHeatmap();
+}
+function blurGrid(src, nx, nz, passes){
+  if (!passes) return src;
+  let a = Float32Array.from(src), b = new Float32Array(a.length);
+  for (let p = 0; p < passes; p++){
+    for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++){
+      let s = 0, n = 0;
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++){
+        const X = x+dx, Z = z+dz;
+        if (X < 0 || Z < 0 || X >= nx || Z >= nz) continue;
+        s += a[Z*nx+X]; n++;
+      }
+      b[z*nx+x] = s/n;
+    }
+    const t = a; a = b; b = t;
+  }
+  return a;
+}
+function paintHeatmap(){
+  if (!heatmap.grid || heatmap.mode === 'off'){ if (heatmap.mesh) heatmap.mesh.visible = false; return; }
+  const nx = heatmap.nx, nz = heatmap.nz;
+  const data = blurGrid(heatmap.grid, nx, nz, heatmap.blur);
+  const peak = Math.max(1e-9, heatmap.max * heatmap.clip);
+  const cv = heatmap.canvas || (heatmap.canvas = document.createElement('canvas'));
+  cv.width = nx; cv.height = nz;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(nx, nz);
+  for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++){
+    const v = data[z*nx+x] / peak;
+    const t = Math.pow(Math.max(0, Math.min(1, v)), heatmap.gamma);
+    // canvas row 0 lands on the FAR edge (-z) once the texture's flipY and the
+    // plane's -90deg X rotation are applied - and grid row 0 is already z0, the
+    // far edge. So rows map straight across; flipping here mirrors the floor.
+    const o = (z*nx + x) * 4;
+    if (v <= 0){ img.data[o+3] = 0; continue; }
+    const c = turbo(t);
+    img.data[o] = c[0]; img.data[o+1] = c[1]; img.data[o+2] = c[2];
+    img.data[o+3] = Math.round(255 * Math.min(1, 0.25 + t*0.95));
+  }
+  ctx.putImageData(img, 0, 0);
+  if (heatmap.tex) heatmap.tex.dispose();
+  heatmap.tex = new THREE.CanvasTexture(cv);
+  heatmap.tex.colorSpace = THREE.SRGBColorSpace;
+  heatmap.tex.magFilter = THREE.LinearFilter;
+  heatmap.tex.minFilter = THREE.LinearFilter;
+
+  const B = heatBounds();
+  if (!heatmap.mesh){
+    heatmap.mesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1),
+      new THREE.MeshBasicMaterial({ transparent:true, depthWrite:false }));
+    heatmap.mesh.rotation.x = -Math.PI/2;
+    heatmap.mesh.renderOrder = 1;
+    heatmap.mesh.name = 'heatmap';
+    scene.add(heatmap.mesh);
+  }
+  heatmap.mesh.geometry.dispose();
+  heatmap.mesh.geometry = new THREE.PlaneGeometry(B.x1-B.x0, B.z1-B.z0);
+  heatmap.mesh.position.set((B.x0+B.x1)/2, 0.015, (B.z0+B.z1)/2);
+  heatmap.mesh.material.map = heatmap.tex;
+  heatmap.mesh.material.opacity = heatmap.opacity;
+  heatmap.mesh.material.needsUpdate = true;
+  heatmap.mesh.visible = true;
+  drawLegend();
+}
+function drawLegend(){
+  const cv = F('hmLegend'), g = cv.getContext('2d');
+  g.clearRect(0,0,cv.width,cv.height);
+  for (let x = 0; x < cv.width; x++){
+    const c = turbo(Math.pow(x/(cv.width-1), heatmap.gamma));
+    g.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+    g.fillRect(x, 0, 1, 18);
+  }
+  g.fillStyle = '#9aa3ad'; g.font = '10px monospace';
+  g.textAlign = 'left';  g.fillText('0', 2, 29);
+  g.textAlign = 'right';
+  const peak = heatmap.max * heatmap.clip;
+  g.fillText(peak.toFixed(heatmap.mode === 'dwell' ? 1 : 0) + heatmap.unit, cv.width-2, 29);
+}
+function setHeatmapMode(mode){
+  heatmap.mode = mode;
+  [['hmOff','off'],['hmUniq','unique'],['hmDwell','dwell']].forEach(([id,m])=>
+    F(id).classList.toggle('on', m === mode));
+  if (mode === 'off'){ if (heatmap.mesh) heatmap.mesh.visible = false; return; }
+  buildHeatmap(mode);         // the two measures are accumulated differently
+}
+F('hmOff').onclick   = ()=> setHeatmapMode('off');
+F('hmUniq').onclick  = ()=> setHeatmapMode('unique');
+F('hmDwell').onclick = ()=> setHeatmapMode('dwell');
+bindRange('hmCell',   v=>v.toFixed(2)+' m', v=>{ heatmap.cell=v; });
+bindRange('hmBlur',   v=>String(v),        v=>{ heatmap.blur=v|0; paintHeatmap(); });
+bindRange('hmOpacity',v=>v.toFixed(2),     v=>{ heatmap.opacity=v;
+  if (heatmap.mesh) heatmap.mesh.material.opacity=v; });
+bindRange('hmGamma',  v=>v.toFixed(2),     v=>{ heatmap.gamma=v; paintHeatmap(); });
+bindRange('hmClip',   v=>(v*100).toFixed(0)+'%', v=>{ heatmap.clip=v; paintHeatmap(); });
+F('hmCell').addEventListener('change', ()=>{ if (heatmap.mode!=='off') buildHeatmap(heatmap.mode); });
+
+/* ============================ HUD / LOOP ============================ */
+const hud = document.getElementById('hud');
+function updateHUD(){
+  hud.textContent =
+    'cam  ' + camState.pos.map(v=>v.toFixed(2)).join(', ') +
+    '\ntgt  ' + camState.tgt.map(v=>v.toFixed(2)).join(', ') +
+    '\nfov  ' + camState.fov.toFixed(1) + '   roll ' + camState.roll.toFixed(2) +
+    '\nlens k1 ' + lens.k1.toFixed(3) + '  k2 ' + lens.k2.toFixed(3) +
+    '\nsel  ' + (selected ? selected.name : '-') +
+    '\noverlay ' + ov.opacity.toFixed(2) +
+    (analysis.loaded ? '\ntrack ' + fmtTime(play.t) + '  ids ' + analysis.ids.length +
+                        '  heat ' + heatmap.mode : '');
+}
+resize();
+function tick(){
+  requestAnimationFrame(tick);
+  if (controls.enabled) controls.update();
+  tickPlayback(performance.now());
+  updateHUD();
+  renderer.setRenderTarget(rt);
+  renderer.render(scene, camera);
+  renderer.setRenderTarget(null);
+  renderer.render(quadScene, quadCam);
+  calibFrame();
+}
+tick();
+
+// expose for console tweaking
+window.bakery = { THREE, scene, camera, sceneManifest, objectsByName, rebuild, camState,
+                  pushCamera, R, buildRoom, analysis, play, heatmap, savedViews, pinView, calibCam };
+</script>
+</body>
+</html>

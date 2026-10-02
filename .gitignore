@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pt
+*.mp4
+analysis.json
+SOLIDER-REID/
+*.pth
+*.gz
+*.log
+cameras.txt
+screen*.jpg
