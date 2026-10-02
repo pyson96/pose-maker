@@ -2,9 +2,9 @@
 """Minimal video -> gzipped analysis JSON (YOLO26l-Pose + ByteTrack + SOLIDER ReID), for bakery.html.
 
     python make_analysis.py --input a.mp4 b.mp4
-        -> 1_YYMMDD.json.gz, 2_YYMMDD.json.gz   (inputs processed concurrently)
+        -> 1_YYMMDD_HHMM.json.gz, 2_YYMMDD_HHMM.json.gz   (inputs processed concurrently)
     python make_analysis.py --input rtsp://... --save-video
-        -> 1_YYMMDD.json.gz + 1_YYMMDD.mp4      (Ctrl+C to stop; both files are closed cleanly)
+        -> 1_YYMMDD_HHMM.json.gz + .mp4      (Ctrl+C to stop; both files are closed cleanly)
     python make_analysis.py
         -> analyses the cameras listed in cameras.txt
     python make_analysis.py --input rtsp://cam1 rtsp://cam2 --overlap-file overlap_zones.json
@@ -46,6 +46,8 @@ DEFAULT_HANDOFF_TTL = 5.0
 DEFAULT_CROSS_REID_THRESHOLD = 0.70
 TRACK_GRACE_SEC = 1.0        # a track missed for less than this still holds its global_id (detection dropouts)
 PATH_STEP_SEC = 1.0          # one route point per person per second in the "people" summary
+RECONNECT_SEC = 5.0          # wait between attempts to reopen a dropped live stream
+STREAM_TIMEOUT_MS = 10000    # RTSP open/read timeout, so a dead camera can't block past the stop time
 
 
 def default_inputs():
@@ -155,7 +157,23 @@ def l2(v):
 def open_capture(path):
     if path.lower().startswith("rtsp://"):
         os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+        return cv2.VideoCapture(path, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, STREAM_TIMEOUT_MS,
+                                                       cv2.CAP_PROP_READ_TIMEOUT_MSEC, STREAM_TIMEOUT_MS])
     return cv2.VideoCapture(path)
+
+
+def reopen_capture(path, should_stop, tag):
+    """Keep trying to reopen a dropped live stream until it works or should_stop() -> capture or None."""
+    attempt = 0
+    while not should_stop():
+        time.sleep(RECONNECT_SEC)
+        attempt += 1
+        cap = open_capture(path)
+        if cap.isOpened():
+            print(tag + "reconnected after %d attempt(s)" % attempt, flush=True)
+            return cap
+        cap.release()
+    return None
 
 
 def load_overlap_config(path):
@@ -401,6 +419,7 @@ def run(order, path, output, args, shared=None):
     if not 0 < fps <= 240:  # live streams often report 0 or a 90 kHz clock
         fps = 30.0
     total = max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))  # 0 for live streams
+    live = total == 0
     print(tag + "%s: %dx%d @ %.3f fps, %d frames -> %s" % (path, w, h, fps, total, output), flush=True)
 
     writer = None
@@ -427,27 +446,46 @@ def run(order, path, output, args, shared=None):
         "coordinate_system": COORDINATE_SYSTEM,
         "camera_id": order,
         "overlap_enabled": zone is not None,
-        "started_at": datetime.now().isoformat(timespec="seconds"),  # wall clock of time 0 (live streams)
     }
     dump = lambda o: json.dumps(o, separators=(",", ":"))
 
     started, idx, written = time.perf_counter(), 0, 0
+    wall0 = time.time()
+    header["started_at"] = datetime.fromtimestamp(wall0).isoformat(timespec="seconds")  # wall clock of time 0
+    # Live streams drop and burst frames over a long day, so their "time" is wall-clock seconds since
+    # started_at; files use the frame index (they are processed faster or slower than real time).
+    header["time_base"] = "wall_clock" if live else "video"
+    clock = (lambda: time.time() - wall0) if live else (lambda: idx / fps)
+
+    def should_stop():
+        return ((args.duration and time.perf_counter() - started >= args.duration)
+                or (args.deadline and time.time() >= args.deadline))
+
     # Header first, then one frame object at a time; the per-person summary closes it even if interrupted.
     with gzip.open(output, "wt", encoding="utf-8", compresslevel=6) as f:
         f.write(dump(header)[:-1] + ',"frames":[')
         try:
             while True:
-                if args.duration and time.perf_counter() - started >= args.duration:
-                    print(tag + "duration reached -- closing file", flush=True)
+                if should_stop():
+                    print(tag + "stop time reached -- closing file", flush=True)
                     break
                 ok, frame = cap.read()
                 if not ok:
-                    break
+                    if not live:
+                        break
+                    print(tag + "stream lost -- reconnecting every %.0f s" % RECONNECT_SEC, flush=True)
+                    cap.release()
+                    cap = reopen_capture(path, should_stop, tag)
+                    if cap is None:
+                        print(tag + "stop time reached while reconnecting -- closing file", flush=True)
+                        break
+                    continue
+                now_t = clock()
                 r = model.track(frame, persist=True, tracker=args.tracker, conf=args.conf, classes=[0],
                                 device=args.device, imgsz=args.imgsz, verbose=False, **extra)[0]
                 if r.boxes is not None and r.boxes.id is not None:
                     for tid, (x1, y1, x2, y2) in zip(r.boxes.id.int().tolist(), r.boxes.xyxy.tolist()):
-                        update_route(routes, tid, idx / fps, (x1 + x2) / 2.0, y2)
+                        update_route(routes, tid, now_t, (x1 + x2) / 2.0, y2)
                 if idx % args.reid_interval == 0 and r.boxes is not None and r.boxes.id is not None:
                     # Handoff timestamps must be comparable across the two processes: wall clock for live
                     # streams, video time for files (assumes both files start at the same moment).
@@ -520,7 +558,7 @@ def run(order, path, output, args, shared=None):
                 if writer is not None:
                     writer.write(r.plot())
                 if idx % args.interval == 0:
-                    rec = {"frame": idx, "time": round(idx / fps, 3), "persons": persons_of(r, args, track_state)}
+                    rec = {"frame": idx, "time": round(now_t, 3), "persons": persons_of(r, args, track_state)}
                     f.write(("," if written else "") + dump(rec))
                     written += 1
                 idx += 1
@@ -535,7 +573,8 @@ def run(order, path, output, args, shared=None):
         except KeyboardInterrupt:
             print(tag + "interrupted -- closing file")
         finally:
-            cap.release()
+            if cap is not None:
+                cap.release()
             if writer is not None:
                 writer.release()  # finalises the mp4 so it stays playable after Ctrl+C
             people = summarize_people(routes, track_state)
@@ -560,8 +599,10 @@ def main():
     p.add_argument("--half", action="store_true")
     p.add_argument("--kpt-conf", type=float, default=0.30)
     p.add_argument("--view-fov", type=float, default=50.0)
-    p.add_argument("--save-video", action="store_true", help="also write an annotated N_YYMMDD.mp4")
+    p.add_argument("--save-video", action="store_true", help="also write an annotated N_YYMMDD_HHMM.mp4")
     p.add_argument("--duration", type=float, default=0, help="stop after N seconds (0 = until the video ends / Ctrl+C)")
+    p.add_argument("--until", default="", metavar="HH:MM",
+                   help="stop cleanly at this time of day, e.g. 19:00 (for scheduled daily runs)")
     p.add_argument("--interval", type=int, default=5, help="write every Nth frame (tracking still runs on all)")
     p.add_argument("--reid-interval", type=int, default=5, help="run ReID on all visible people every Nth frame")
     p.add_argument("--reid-threshold", type=float, default=0.6, help="min cosine similarity to reuse a global_id")
@@ -572,6 +613,15 @@ def main():
     args = p.parse_args()
     if not args.input:
         p.error("no --input given and cameras.txt is missing or empty")
+    args.deadline = 0.0
+    if args.until:
+        try:
+            stop = datetime.combine(datetime.now().date(), datetime.strptime(args.until, "%H:%M").time())
+        except ValueError:
+            p.error("--until must be HH:MM, e.g. 19:00")
+        if stop <= datetime.now():
+            p.error("--until %s has already passed today" % args.until)
+        args.deadline = stop.timestamp()
     args.interval = max(1, args.interval)
     args.reid_interval = max(1, args.reid_interval)
     for f in (args.reid_weights, os.path.join(args.reid_repo, "model", "backbones", "swin_transformer.py")):
@@ -579,8 +629,8 @@ def main():
             p.error("ReID file not found: " + f)
 
     os.makedirs(args.out_dir, exist_ok=True)
-    date = datetime.now().strftime("%y%m%d")
-    jobs = [(i, path, os.path.join(args.out_dir, "%d_%s.json.gz" % (i, date)))
+    stamp = datetime.now().strftime("%y%m%d_%H%M")  # with the time, so a restart never overwrites
+    jobs = [(i, path, os.path.join(args.out_dir, "%d_%s.json.gz" % (i, stamp)))
             for i, path in enumerate(args.input, 1)]
 
     # Overlap handoff is for exactly two cameras; set it up before any model is loaded.

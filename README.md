@@ -94,8 +94,9 @@ python make_analysis.py --save-video             # 분석 결과를 그린 mp4�
 ```
 
 - 입력마다 별도 프로세스로 동시에 처리합니다.
-- 결과는 `1_YYMMDD.json.gz`, `2_YYMMDD.json.gz` 형식으로 저장됩니다(번호는 입력 순서).
-- RTSP는 끝이 없으므로 **Ctrl+C로 종료**합니다. 종료해도 json.gz와 mp4는 정상적으로 닫힙니다.
+- 결과는 `1_YYMMDD_HHMM.json.gz`, `2_YYMMDD_HHMM.json.gz` 형식으로 저장됩니다(번호는 입력 순서, 시각은 시작 시각). 같은 날 다시 실행해도 덮어쓰지 않습니다.
+- RTSP는 끝이 없으므로 **Ctrl+C**, `--duration`, `--until`로 종료합니다. 어느 방법이든 json.gz와 mp4는 정상적으로 닫힙니다.
+- RTSP 연결이 끊기면 5초마다 다시 접속을 시도합니다. 종료 시각이 되면 재접속을 멈추고 파일을 닫습니다.
 
 자주 쓰는 옵션:
 
@@ -110,6 +111,7 @@ python make_analysis.py --save-video             # 분석 결과를 그린 mp4�
 | `--reid-threshold` | `0.6` | 같은 사람으로 볼 최소 유사도 |
 | `--save-video` | 끔 | 분석 결과를 그린 영상 저장 |
 | `--duration` | `0` | N초 후 자동 종료 (0 = 영상 끝 또는 Ctrl+C까지) |
+| `--until` | 없음 | 지정한 시각(`HH:MM`)에 자동 종료, 예: `--until 19:00` |
 
 전체 옵션은 `python make_analysis.py -h`로 확인하세요.
 
@@ -122,6 +124,20 @@ copy cameras.example.txt cameras.txt     # Linux: cp
 ```
 
 비밀번호가 들어 있으므로 `cameras.txt`는 git에 올리지 마세요(`.gitignore`에 포함).
+
+### 매일 자동 실행 (10:00~19:00)
+
+`run_daily.bat`이 `make_analysis.py --until 19:00`을 실행하고, 로그를 `logs\analysis.log`에 이어 붙입니다. Windows 작업 스케줄러에 등록합니다.
+
+```bat
+schtasks /create /tn PoseMaker /tr "C:\Users\<user>\pose-maker\run_daily.bat" /sc daily /st 10:00 /et 19:15 /k
+```
+
+- `/st 10:00`: 매일 10시에 시작합니다.
+- 19시 종료는 프로그램이 `--until 19:00`으로 **스스로** 합니다. 그래야 결과 파일이 정상적으로 닫힙니다.
+- `/et 19:15 /k`: 19:15까지 끝나지 않으면 강제 종료하는 안전장치입니다. 강제 종료되면 그날 파일은 깨지므로, 19시 정각으로 걸지 마세요.
+- 위 명령은 로그인한 사용자 세션에서만 실행됩니다. 로그아웃 상태에서도 돌리려면 `/ru <계정> /rp <비밀번호>`를 추가합니다.
+- `overlap_zones.json`을 먼저 만들어 두세요. 없으면 영역 그리기 창이 떠서 자동 실행이 멈춥니다.
 
 ## 결과 보기
 
@@ -137,7 +153,8 @@ copy cameras.example.txt cameras.txt     # Linux: cp
   "video": { "width", "height", "fps", "total_frames", "duration_sec", "source" },
   "coordinate_system": { ... },   // 원점 좌상단, 픽셀 단위
   "camera_id": 1, "overlap_enabled": true,
-  "started_at": "2026-10-02T18:01:00",   // time 0의 실제 시각 (실시간 스트림용)
+  "started_at": "2026-10-02T18:01:00",   // time 0의 실제 시각
+  "time_base": "wall_clock",              // RTSP: time = started_at부터 흐른 실제 초 / 파일: "video" (프레임 번호 ÷ fps)
   "frames": [
     { "frame": 0, "time": 0.0, "persons": [
       { "track_id", "global_id", "bbox": {"x1","y1","x2","y2"}, "det_conf",
