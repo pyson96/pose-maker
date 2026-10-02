@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Minimal video -> gzipped analysis JSON (YOLO26-Pose + ByteTrack + SOLIDER ReID), for bakery.html.
+"""Minimal video -> gzipped analysis JSON (YOLO26l-Pose + ByteTrack + SOLIDER ReID), for bakery.html.
 
     python make_analysis.py --input a.mp4 b.mp4
         -> 1_YYMMDD.json.gz, 2_YYMMDD.json.gz   (inputs processed concurrently)
@@ -217,6 +217,9 @@ def run(order, path, output, args):
         f.write(dump(header)[:-1] + ',"frames":[')
         try:
             while True:
+                if args.duration and time.perf_counter() - started >= args.duration:
+                    print(tag + "duration reached -- closing file", flush=True)
+                    break
                 ok, frame = cap.read()
                 if not ok:
                     break
@@ -283,7 +286,7 @@ def main():
     p.add_argument("--input", nargs="+", default=default_inputs(),
                    help="one or more videos, processed concurrently (default: cameras.txt)")
     p.add_argument("--out-dir", default=".")
-    p.add_argument("--model", default="yolo26m-pose.pt")
+    p.add_argument("--model", default="yolo26l-pose.pt")
     p.add_argument("--tracker", default="bytetrack.yaml")
     p.add_argument("--device", default="0", help="'0' or 'cpu'")
     p.add_argument("--conf", type=float, default=0.1)
@@ -292,6 +295,7 @@ def main():
     p.add_argument("--kpt-conf", type=float, default=0.30)
     p.add_argument("--view-fov", type=float, default=50.0)
     p.add_argument("--save-video", action="store_true", help="also write an annotated N_YYMMDD.mp4")
+    p.add_argument("--duration", type=float, default=0, help="stop after N seconds (0 = until the video ends / Ctrl+C)")
     p.add_argument("--interval", type=int, default=5, help="write every Nth frame (tracking still runs on all)")
     p.add_argument("--reid-interval", type=int, default=5, help="run ReID on all visible people every Nth frame")
     p.add_argument("--reid-threshold", type=float, default=0.6, help="min cosine similarity to reuse a global_id")

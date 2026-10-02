@@ -45,7 +45,7 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 
 | 파일 | 준비 방법 |
 |---|---|
-| `yolo26m-pose.pt` | 첫 실행 시 자동 다운로드 — 할 일 없음 |
+| `yolo26l-pose.pt` | 첫 실행 시 자동 다운로드 — 할 일 없음 |
 | `SOLIDER-REID/` | `git clone https://github.com/tinyvision/SOLIDER-REID` |
 | `solider_swin_small_msmt17.pth` (약 199MB) | 기존 PC에서 복사하거나, SOLIDER-REID README의 MSMT17 Swin-Small 가중치 링크에서 다운로드 |
 | `cameras.txt` | `cameras.example.txt`를 복사해 계정/비밀번호 입력 (비밀번호가 있어 git 제외) |
@@ -103,12 +103,13 @@ python make_analysis.py --save-video             # 분석 결과를 그린 mp4�
 |---|---|---|
 | `--input` | `cameras.txt` | 영상 파일 또는 RTSP 주소, 여러 개 가능 |
 | `--out-dir` | `.` | 결과 저장 폴더 |
-| `--model` | `yolo26m-pose.pt` | 더 빠르게 하려면 `yolo26n-pose.pt` |
+| `--model` | `yolo26l-pose.pt` | 더 빠르게 하려면 `yolo26m-pose.pt` / `yolo26n-pose.pt` |
 | `--device` | `0` | GPU 번호 또는 `cpu` |
 | `--interval` | `5` | N프레임마다 기록(추적은 모든 프레임에서 수행) |
 | `--reid-interval` | `5` | N프레임마다 ReID 실행 |
 | `--reid-threshold` | `0.6` | 같은 사람으로 볼 최소 유사도 |
 | `--save-video` | 끔 | 분석 결과를 그린 영상 저장 |
+| `--duration` | `0` | N초 후 자동 종료 (0 = 영상 끝 또는 Ctrl+C까지) |
 
 전체 옵션은 `python make_analysis.py -h`로 확인하세요.
 
