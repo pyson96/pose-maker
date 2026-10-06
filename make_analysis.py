@@ -641,6 +641,11 @@ def main():
             p.error("ReID file not found: " + f)
 
     os.makedirs(args.out_dir, exist_ok=True)
+    if os.name == "nt":
+        # Keep Windows from idle-sleeping mid-run (that drops the streams); released when the process exits.
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+
     stamp = datetime.now().strftime("%y%m%d_%H%M")  # with the time, so a restart never overwrites
     jobs = [(i, path, os.path.join(args.out_dir, "%d_%s.json.gz" % (i, stamp)))
             for i, path in enumerate(args.input, 1)]
