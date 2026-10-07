@@ -2,7 +2,7 @@
 """Minimal video -> gzipped analysis JSON (YOLO26l-Pose + ByteTrack + SOLIDER ReID), for bakery.html.
 
     python make_analysis.py --input a.mp4 b.mp4
-        -> 1_YYMMDD_HHMM.json.gz, 2_YYMMDD_HHMM.json.gz   (inputs processed concurrently)
+        -> results/YYYY-MM/1_YYMMDD_HHMM.json.gz, 2_...   (inputs processed concurrently)
     python make_analysis.py --input rtsp://... --save-video
         -> 1_YYMMDD_HHMM.json.gz + .mp4      (Ctrl+C to stop; both files are closed cleanly)
     python make_analysis.py
@@ -602,7 +602,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--input", nargs="+", default=default_inputs(),
                    help="one or more videos, processed concurrently (default: cameras.txt)")
-    p.add_argument("--out-dir", default=".")
+    p.add_argument("--out-dir", default="results", help="results go to <out-dir>/YYYY-MM/")
     p.add_argument("--model", default="yolo26l-pose.pt")
     p.add_argument("--tracker", default="bytetrack.yaml")
     p.add_argument("--device", default="0", help="'0' or 'cpu'")
@@ -640,14 +640,16 @@ def main():
         if not os.path.isfile(f):
             p.error("ReID file not found: " + f)
 
-    os.makedirs(args.out_dir, exist_ok=True)
+    now = datetime.now()
+    out_dir = os.path.join(args.out_dir, now.strftime("%Y-%m"))  # one folder per month, e.g. results/2026-10
+    os.makedirs(out_dir, exist_ok=True)
     if os.name == "nt":
         # Keep Windows from idle-sleeping mid-run (that drops the streams); released when the process exits.
         import ctypes
         ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)  # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
 
-    stamp = datetime.now().strftime("%y%m%d_%H%M")  # with the time, so a restart never overwrites
-    jobs = [(i, path, os.path.join(args.out_dir, "%d_%s.json.gz" % (i, stamp)))
+    stamp = now.strftime("%y%m%d_%H%M")  # with the time, so a restart never overwrites
+    jobs = [(i, path, os.path.join(out_dir, "%d_%s.json.gz" % (i, stamp)))
             for i, path in enumerate(args.input, 1)]
 
     # Overlap handoff is for exactly two cameras; set it up before any model is loaded.

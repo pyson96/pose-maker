@@ -9,3 +9,4 @@ SOLIDER-REID/
 *.log
 cameras.txt
 screen*.jpg
+results/

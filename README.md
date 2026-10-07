@@ -94,7 +94,7 @@ python make_analysis.py --save-video             # 분석 결과를 그린 mp4�
 ```
 
 - 입력마다 별도 프로세스로 동시에 처리합니다.
-- 결과는 `1_YYMMDD_HHMM.json.gz`, `2_YYMMDD_HHMM.json.gz` 형식으로 저장됩니다(번호는 입력 순서, 시각은 시작 시각). 같은 날 다시 실행해도 덮어쓰지 않습니다.
+- 결과는 `results\YYYY-MM\` 월별 폴더에 `1_YYMMDD_HHMM.json.gz`, `2_YYMMDD_HHMM.json.gz` 형식으로 저장됩니다(번호는 입력 순서, 시각은 시작 시각). 폴더는 자동으로 만들어지고, 같은 날 다시 실행해도 덮어쓰지 않습니다.
 - RTSP는 끝이 없으므로 **Ctrl+C**, `--duration`, `--until`로 종료합니다. 어느 방법이든 json.gz와 mp4는 정상적으로 닫힙니다.
 - RTSP 연결이 끊기면 5초마다 다시 접속을 시도합니다. 종료 시각이 되면 재접속을 멈추고 파일을 닫습니다.
 - `--until`을 준 경우, 시작할 때 카메라가 아직 켜져 있지 않아도 종료 시각까지 계속 접속을 시도합니다.
@@ -104,7 +104,7 @@ python make_analysis.py --save-video             # 분석 결과를 그린 mp4�
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
 | `--input` | `cameras.txt` | 영상 파일 또는 RTSP 주소, 여러 개 가능 |
-| `--out-dir` | `.` | 결과 저장 폴더 |
+| `--out-dir` | `results` | 결과 저장 폴더 (그 아래 `YYYY-MM` 월별 폴더에 저장) |
 | `--model` | `yolo26l-pose.pt` | 더 빠르게 하려면 `yolo26m-pose.pt` / `yolo26n-pose.pt` |
 | `--device` | `0` | GPU 번호 또는 `cpu` |
 | `--interval` | `5` | N프레임마다 기록(추적은 모든 프레임에서 수행) |
