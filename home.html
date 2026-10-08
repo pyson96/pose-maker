@@ -999,91 +999,133 @@ function getViz(vkey, key){                      // vkey = "<rig>:<key>": each c
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new V3(), _d = new V3();
 function lerpV(a, b, t){ return a && b ? a.clone().lerp(b, t) : a; }
 
-/* CCTV view: only the people the active camera saw. Free/top views: both cameras' people in the shared room. */
+/* CCTV view: only the people the active camera saw. Free/top views: both cameras' people in the shared room,
+   and one global_id seen by both cameras at nearly the same spot is drawn once (mergePeople). */
+const MERGE_DIST = 1.5;                           // m between the two cameras' floor positions of one global_id
 function drawPeople(t){
   for (const v of viz.values()){ v.g.visible = false; v.trail.visible = false; }
-  const counts = CAMS.map(r => {
-    if (!r.analysis.loaded || (view === 'cctv' && r !== activeRig())) return 0;
+  const counts = CAMS.map(() => 0), all = [];
+  for (const r of CAMS){
+    if (!r.analysis.loaded || (view === 'cctv' && r !== activeRig())) continue;
     useRig(r);
-    return drawRigPeople(r, t - r.offset);
-  });
+    const got = collectRigPeople(r, t - r.offset);
+    counts[r.idx] = got.length; all.push(...got);
+  }
   useRig(activeRig());
+  for (const e of view === 'cctv' ? all : mergePeople(all)) renderPerson(e);
   return counts;
 }
-function drawRigPeople(r, t){
+
+/* current rig's people at time t (interpolated between exported frames), not drawn yet */
+function collectRigPeople(r, t){
   const i = frameIndexAt(t);
-  if (i < 0 || t < analysis.times[0] - 1 || t > analysis.duration + 1) return 0;   // outside this file's span
+  if (i < 0 || t < analysis.times[0] - 1 || t > analysis.duration + 1) return [];   // outside this file's span
   const A = poseAt(i), T = analysis.times;
   // interpolate toward the next exported frame (make_analysis.py writes every Nth frame)
   let B = null, a = 0;
   if (i + 1 < T.length && T[i+1] - T[i] < 1.5){ B = poseAt(i + 1); a = THREE.MathUtils.clamp((t - T[i]) / (T[i+1] - T[i]), 0, 1); }
-  let shown = 0;
+  const out = [];
   for (const [key, pa] of A){
     if (hidden.has(key)) continue;
     const pb = B && B.get(key);
     const anchor = pb ? pa.anchor.clone().lerp(pb.anchor, a) : pa.anchor;
+    const dist = Math.hypot(anchor.x - basis.pos.x, anchor.z - basis.pos.z);
     // someone right under the lens is mostly out of frame and badly placed; drawn into the CCTV view
     // their head ball would cover the picture, so they only appear in the free/top views
-    if (view === 'cctv' && Math.hypot(anchor.x - basis.pos.x, anchor.z - basis.pos.z) < 0.8) continue;
-    const v = getViz(r.idx + ':' + key, key); v.g.visible = true; shown++;
+    if (view === 'cctv' && dist < 0.8) continue;
     const joints = pa.joints.map((q, j) => pb ? lerpV(q, pb.joints[j], a) : q);
     const guess = pa.inferred || [];
-    v.ring.position.set(anchor.x, 0.006, anchor.z); v.disc.position.set(anchor.x, 0.012, anchor.z);
-
-    // solid = seen in this frame, ghost = inferred; a bone is solid only if both ends were seen
-    const cnt = { b:0, bg:0, j:0, jg:0 };
-    let top = 1.2;
-    const bone = (p, q, ghost) => {
-      _d.copy(q).sub(p); const len = _d.length(); if (len < 1e-4) return;
-      _q.setFromUnitVectors(UP, _d.divideScalar(len));
-      _m.compose(p, _q, _s.set(R_BONE, len, R_BONE));
-      ghost ? v.bonesG.setMatrixAt(cnt.bg++, _m) : v.bones.setMatrixAt(cnt.b++, _m);
-    };
-    v.headBall.visible = false;
-    if (opts.skel){
-      for (const [ja, jb] of BODY_BONES) if (joints[ja] && joints[jb]) bone(joints[ja], joints[jb], guess[ja] || guess[jb]);
-      for (let j = 5; j < KP_N; j++){
-        const q = joints[j]; if (!q) continue;
-        _m.compose(q, _q.identity(), _s.setScalar(R_JOINT));
-        guess[j] ? v.jointsG.setMatrixAt(cnt.jg++, _m) : v.joints.setMatrixAt(cnt.j++, _m);
-        top = Math.max(top, q.y);
-      }
-      // head: centre of the face points; neck from mid-shoulder
-      const face = [0, 1, 2, 3, 4].filter(j => joints[j]);
-      if (face.length){
-        const h = face.reduce((s, j) => s.add(joints[j]), new V3()).multiplyScalar(1 / face.length);
-        const faceSeen = face.some(j => !guess[j]);
-        v.headBall.position.copy(h); v.headBall.material = faceSeen ? v.bodyMat : v.ghostMat; v.headBall.visible = true;
-        top = Math.max(top, h.y + R_HEAD);
-        if (joints[5] && joints[6])
-          bone(joints[5].clone().add(joints[6]).multiplyScalar(0.5), h, !faceSeen || guess[5] || guess[6]);
-      }
-    }
-    v.bones.count = cnt.b; v.bonesG.count = cnt.bg; v.joints.count = cnt.j; v.jointsG.count = cnt.jg;
-    for (const o of [v.bones, v.bonesG, v.joints, v.jointsG]) o.instanceMatrix.needsUpdate = true;
-
-    v.label.visible = opts.label;
-    v.label.scale.set(view === 'cctv' ? 0.42 : 0.7, view === 'cctv' ? 0.17 : 0.28, 1);
-    v.label.position.set(anchor.x, top + 0.28, anchor.z);
-
-    v.gaze.visible = false;
-    if (opts.gaze && pa.head){
-      const h = pa.head, half = h.fov*D2R/2, R = 1.3, seg = 12, pos = [h.p.x, h.p.y, h.p.z];
-      const base = Math.atan2(h.d.z, h.d.x);
-      for (let s = 0; s <= seg; s++){ const ang = base - half + 2*half*s/seg; pos.push(h.p.x + R*Math.cos(ang), h.p.y, h.p.z + R*Math.sin(ang)); }
-      const idx = []; for (let s = 1; s <= seg; s++) idx.push(0, s, s + 1);
-      v.gaze.geometry.dispose();
-      v.gaze.geometry = new THREE.BufferGeometry(); v.gaze.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-      v.gaze.geometry.setIndex(idx); v.gaze.visible = true;
-    }
+    let trail = null;
     if (opts.trail && key !== 'T-1'){            // track_id -1 = untracked detections, not one person
-      const pts = [];
-      for (let k = i; k >= 0 && T[i] - T[k] <= opts.trailSec; k--){ const q = anchorsAt(k).get(key); if (q) pts.push(new V3(q.x, 0.03, q.z)); }
-      pts.reverse(); pts.push(new V3(anchor.x, 0.03, anchor.z));
-      if (pts.length > 1){ v.trail.geometry.dispose(); v.trail.geometry = new THREE.BufferGeometry().setFromPoints(pts); v.trail.visible = true; }
+      trail = [];
+      for (let k = i; k >= 0 && T[i] - T[k] <= opts.trailSec; k--){ const q = anchorsAt(k).get(key); if (q) trail.push(new V3(q.x, 0.03, q.z)); }
+      trail.reverse(); trail.push(new V3(anchor.x, 0.03, anchor.z));
+    }
+    // trust: joints actually seen, discounted with distance from this camera
+    const seen = joints.filter((q, j) => q && !guess[j]).length;
+    out.push({ vkey:r.idx + ':' + key, key, anchor, joints, guess, head:pa.head, trail, w:(seen + 1) / (1 + dist / 3) });
+  }
+  return out;
+}
+
+/* one entry per global_id where both cameras see it within MERGE_DIST: weighted mean of the two bodies;
+   a joint guessed by one camera counts a fifth as much as one the other camera saw */
+function mergePeople(all){
+  const byKey = new Map(), out = [];
+  for (const e of all){
+    if (e.key[0] !== 'G'){ out.push(e); continue; }
+    (byKey.get(e.key) || byKey.set(e.key, []).get(e.key)).push(e);
+  }
+  for (const [key, es] of byKey){
+    es.sort((x, y) => y.w - x.w);
+    const lead = es[0], group = [lead];
+    for (const e of es.slice(1)) (e.anchor.distanceTo(lead.anchor) < MERGE_DIST ? group : out).push(e);
+    if (group.length === 1){ out.push(lead); continue; }
+    const W = group.reduce((s, e) => s + e.w, 0);
+    const anchor = group.reduce((s, e) => s.addScaledVector(e.anchor, e.w / W), new V3());
+    const joints = [], guess = [];
+    for (let j = 0; j < KP_N; j++){
+      const sum = new V3(); let ws = 0;
+      for (const e of group) if (e.joints[j]){ const w = e.w * (e.guess[j] ? 0.2 : 1); sum.addScaledVector(e.joints[j], w); ws += w; }
+      joints.push(ws ? sum.multiplyScalar(1 / ws) : null);
+      guess.push(group.every(e => !e.joints[j] || e.guess[j]));
+    }
+    out.push({ vkey:'M:' + key, key, anchor, joints, guess, head:lead.head, trail:lead.trail, w:W });
+  }
+  return out;
+}
+
+function renderPerson({ vkey, key, anchor, joints, guess, head:gz, trail }){
+  const v = getViz(vkey, key); v.g.visible = true;
+  v.ring.position.set(anchor.x, 0.006, anchor.z); v.disc.position.set(anchor.x, 0.012, anchor.z);
+
+  // solid = seen in this frame, ghost = inferred; a bone is solid only if both ends were seen
+  const cnt = { b:0, bg:0, j:0, jg:0 };
+  let top = 1.2;
+  const bone = (p, q, ghost) => {
+    _d.copy(q).sub(p); const len = _d.length(); if (len < 1e-4) return;
+    _q.setFromUnitVectors(UP, _d.divideScalar(len));
+    _m.compose(p, _q, _s.set(R_BONE, len, R_BONE));
+    ghost ? v.bonesG.setMatrixAt(cnt.bg++, _m) : v.bones.setMatrixAt(cnt.b++, _m);
+  };
+  v.headBall.visible = false;
+  if (opts.skel){
+    for (const [ja, jb] of BODY_BONES) if (joints[ja] && joints[jb]) bone(joints[ja], joints[jb], guess[ja] || guess[jb]);
+    for (let j = 5; j < KP_N; j++){
+      const q = joints[j]; if (!q) continue;
+      _m.compose(q, _q.identity(), _s.setScalar(R_JOINT));
+      guess[j] ? v.jointsG.setMatrixAt(cnt.jg++, _m) : v.joints.setMatrixAt(cnt.j++, _m);
+      top = Math.max(top, q.y);
+    }
+    // head: centre of the face points; neck from mid-shoulder
+    const face = [0, 1, 2, 3, 4].filter(j => joints[j]);
+    if (face.length){
+      const h = face.reduce((s, j) => s.add(joints[j]), new V3()).multiplyScalar(1 / face.length);
+      const faceSeen = face.some(j => !guess[j]);
+      v.headBall.position.copy(h); v.headBall.material = faceSeen ? v.bodyMat : v.ghostMat; v.headBall.visible = true;
+      top = Math.max(top, h.y + R_HEAD);
+      if (joints[5] && joints[6])
+        bone(joints[5].clone().add(joints[6]).multiplyScalar(0.5), h, !faceSeen || guess[5] || guess[6]);
     }
   }
-  return shown;
+  v.bones.count = cnt.b; v.bonesG.count = cnt.bg; v.joints.count = cnt.j; v.jointsG.count = cnt.jg;
+  for (const o of [v.bones, v.bonesG, v.joints, v.jointsG]) o.instanceMatrix.needsUpdate = true;
+
+  v.label.visible = opts.label;
+  v.label.scale.set(view === 'cctv' ? 0.42 : 0.7, view === 'cctv' ? 0.17 : 0.28, 1);
+  v.label.position.set(anchor.x, top + 0.28, anchor.z);
+
+  v.gaze.visible = false;
+  if (opts.gaze && gz){
+    const h = gz, half = h.fov*D2R/2, R = 1.3, seg = 12, pos = [h.p.x, h.p.y, h.p.z];
+    const base = Math.atan2(h.d.z, h.d.x);
+    for (let s = 0; s <= seg; s++){ const ang = base - half + 2*half*s/seg; pos.push(h.p.x + R*Math.cos(ang), h.p.y, h.p.z + R*Math.sin(ang)); }
+    const idx = []; for (let s = 1; s <= seg; s++) idx.push(0, s, s + 1);
+    v.gaze.geometry.dispose();
+    v.gaze.geometry = new THREE.BufferGeometry(); v.gaze.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    v.gaze.geometry.setIndex(idx); v.gaze.visible = true;
+  }
+  if (trail && trail.length > 1){ v.trail.geometry.dispose(); v.trail.geometry = new THREE.BufferGeometry().setFromPoints(trail); v.trail.visible = true; }
 }
 
 /* ============================== PLAYBACK ============================== */
