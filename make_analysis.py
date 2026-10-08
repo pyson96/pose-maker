@@ -43,7 +43,12 @@ REID_SEMANTIC = 0.2          # SOLIDER semantic weight used for its released ReI
 MIN_CROP_W, MIN_CROP_H = 16, 32
 CAMERAS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cameras.txt")
 DEFAULT_HANDOFF_TTL = 5.0
-DEFAULT_CROSS_REID_THRESHOLD = 0.70
+DEFAULT_CROSS_REID_THRESHOLD = 0.70   # handoff_mode "appearance" only
+# "position": someone who left the other camera's overlap zone within handoff_ttl is the same person,
+# whatever they look like (the shared passage shows little more than a head). "appearance": also needs
+# cross_reid_threshold similarity.
+DEFAULT_HANDOFF_MODE = "position"
+DEFAULT_ZONE_OVERLAP = 0.10   # a person is in the zone once this share of their box overlaps it
 TRACK_GRACE_SEC = 1.0        # a track missed for less than this still holds its global_id (detection dropouts)
 PATH_STEP_SEC = 1.0          # one route point per person per second in the "people" summary
 RECONNECT_SEC = 5.0          # wait between attempts to reopen a dropped live stream
@@ -192,16 +197,15 @@ def load_overlap_config(path):
             raise SystemExit("%s: %s needs a polygon with at least 3 points" % (path, cam))
     cfg.setdefault("handoff_ttl", DEFAULT_HANDOFF_TTL)
     cfg.setdefault("cross_reid_threshold", DEFAULT_CROSS_REID_THRESHOLD)
+    cfg.setdefault("handoff_mode", DEFAULT_HANDOFF_MODE)
+    cfg.setdefault("zone_overlap_ratio", DEFAULT_ZONE_OVERLAP)
+    if cfg["handoff_mode"] not in ("position", "appearance"):
+        raise SystemExit("%s: handoff_mode must be \"position\" or \"appearance\"" % path)
     return cfg
 
 
 def setup_overlap_config(paths, out_file):
-    """Draw one overlap polygon per camera on a preview frame (no YOLO / SOLIDER loaded).
-
-    Click inside a camera's panel to add a point to that camera's polygon (it becomes the selected one),
-    r = reset the selected polygon, Enter = save both (>= 3 points each), Esc = cancel.
-    Returns the saved config, or None when cancelled.
-    """
+    """Draw one overlap polygon per camera on a live preview frame (no YOLO / SOLIDER loaded)."""
     frames = []
     for path in paths:
         cap = open_capture(path)
@@ -214,7 +218,17 @@ def setup_overlap_config(paths, out_file):
         if frame is None:
             raise SystemExit("overlap setup: cannot read a frame from " + path)
         frames.append(frame)
+    return draw_overlap_config(frames, out_file)
 
+
+def draw_overlap_config(frames, out_file):
+    """Draw one overlap polygon per camera on the two given frames and save them.
+
+    The frames must be at the analysis resolution: polygon points are stored in their pixels.
+    Click inside a camera's panel to add a point to that camera's polygon (it becomes the selected one),
+    r = reset the selected polygon, Enter = save both (>= 3 points each), Esc = cancel.
+    Returns the saved config, or None when cancelled.
+    """
     scales = [min(1.0, 800.0 / f.shape[1]) for f in frames]  # keep the window on screen
     views = [cv2.resize(f, None, fx=s, fy=s) for f, s in zip(frames, scales)]
     gap, bar = 12, 34
@@ -272,16 +286,34 @@ def setup_overlap_config(paths, out_file):
         cv2.destroyAllWindows()
 
     cfg = {"camera1": {"polygon": polys[0]}, "camera2": {"polygon": polys[1]},
-           "handoff_ttl": DEFAULT_HANDOFF_TTL, "cross_reid_threshold": DEFAULT_CROSS_REID_THRESHOLD}
+           "handoff_ttl": DEFAULT_HANDOFF_TTL, "handoff_mode": DEFAULT_HANDOFF_MODE,
+           "zone_overlap_ratio": DEFAULT_ZONE_OVERLAP,
+           "cross_reid_threshold": DEFAULT_CROSS_REID_THRESHOLD}
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
     log("overlap zones saved -> " + out_file)
     return cfg
 
 
-def point_in_overlap(polygon, x, y):
-    """Is this ground point inside the camera's overlap polygon (the edge counts as inside)?"""
-    return cv2.pointPolygonTest(polygon, (float(x), float(y)), False) >= 0
+def zone_coverage(polygon, w, h):
+    """-> f(x1, y1, x2, y2): the share of that box lying inside the overlap polygon (0..1).
+
+    In the shared passage a person is mostly hidden -- a head and some shoulder -- so the box's bottom
+    edge is not their feet; how much of the box overlaps the zone says more. A summed-area table of the
+    polygon mask makes each query four lookups, concave polygons included.
+    """
+    mask = np.zeros((h, w), np.uint8)
+    cv2.fillPoly(mask, [np.round(polygon).astype(np.int32)], 1)
+    sat = cv2.integral(mask)                                   # (h+1) x (w+1)
+
+    def cover(x1, y1, x2, y2):
+        x1, y1 = max(0, min(w, int(x1))), max(0, min(h, int(y1)))
+        x2, y2 = max(0, min(w, int(x2))), max(0, min(h, int(y2)))
+        area = (x2 - x1) * (y2 - y1)
+        if area <= 0:
+            return 0.0
+        return float(sat[y2, x2] - sat[y1, x2] - sat[y2, x1] + sat[y1, x1]) / area
+    return cover
 
 
 def allocate_global_id(shared, local_counter):
@@ -297,6 +329,9 @@ def allocate_global_id(shared, local_counter):
 def find_handoff_match(shared, camera, emb, now, ttl, threshold, active, below=None):
     """Best recent overlap candidate from the OTHER camera -> (key, global_id, embedding, sim) or None.
 
+    threshold None (handoff_mode "position"): whoever stood in the other camera's zone within ttl is
+    taken whatever they look like -- in the passage only a head and a bit of shoulder show, so the
+    appearance can't be trusted. Similarity then only picks between several candidates.
     below: a young track's own global_id -- only older (smaller) ids are considered, and nothing at all
     once the other camera already carries this id (the two cameras have agreed on it).
     """
@@ -316,7 +351,7 @@ def find_handoff_match(shared, camera, emb, now, ttl, threshold, active, below=N
         sim = float(emb @ cand["embedding"])
         if sim > best_sim:
             best, best_sim = (key, cand["global_id"], cand["embedding"], sim), sim
-    return best if best is not None and best_sim >= threshold else None
+    return best if best is not None and (threshold is None or best_sim >= threshold) else None
 
 
 def take_handoff(shared, key):
@@ -444,12 +479,17 @@ def run(order, path, output, args, shared=None):
     reid = load_reid(args)
     track_state = {}   # track_id -> {"global_id", "embedding" (EMA prototype), "in_overlap", "last_seen"}
     gallery = {}       # global_id -> prototype; kept after the track ends so re-entries can match
+    gallery_seen = {}  # global_id -> last time seen; older than --id-keep and the id can't be reused
     local_gid = [0]    # global_id counter when this is the only camera
     routes = {}        # track_id -> sightings summary for the "people" section (see update_route)
     zones = shared.get("zones") if shared else None
     zone = np.array(zones["camera%d" % order]["polygon"], np.float32) if zones else None
     if zone is not None:
-        ttl, cross_thr = float(zones["handoff_ttl"]), float(zones["cross_reid_threshold"])
+        in_zone_share = zone_coverage(zone, w, h)
+        min_share = float(zones.get("zone_overlap_ratio", DEFAULT_ZONE_OVERLAP))
+        ttl = float(zones["handoff_ttl"])
+        by_position = zones.get("handoff_mode", DEFAULT_HANDOFF_MODE) == "position"
+        cross_thr = None if by_position else float(zones["cross_reid_threshold"])
         handoffs = shared["handoffs"]
     extra = {"half": True} if args.half else {}  # passing half at all warns every frame on 8.4+
     header = {
@@ -504,34 +544,42 @@ def run(order, path, output, args, shared=None):
                     now = idx / fps if total else time.time()
                     visible = r.boxes.id.int().tolist()
                     fh, fw = frame.shape[:2]
-                    tids, crops, grounds = [], [], []
+                    tids, crops, boxes = [], [], []
                     for tid, (x1, y1, x2, y2) in zip(visible, r.boxes.xyxy.tolist()):
-                        gp = ((x1 + x2) / 2.0, y2)  # same ground point as the JSON
                         x1, y1, x2, y2 = max(0, int(x1)), max(0, int(y1)), min(fw, int(x2)), min(fh, int(y2))
                         if x2 - x1 >= MIN_CROP_W and y2 - y1 >= MIN_CROP_H:
                             tids.append(tid)
                             crops.append(frame[y1:y2, x1:x2])
-                            grounds.append(gp)
+                            boxes.append((x1, y1, x2, y2))
                     for t in visible:
                         if t in track_state:
                             track_state[t]["last_seen"] = now
                     # identities on screen now or a moment ago: never hand them to a second track
                     active = {st["global_id"] for st in track_state.values() if now - st["last_seen"] <= TRACK_GRACE_SEC}
-                    for tid, emb, gp in zip(tids, reid_embed(reid, crops) if crops else [], grounds):
+                    for tid, emb, box in zip(tids, reid_embed(reid, crops) if crops else [], boxes):
                         st = track_state.get(tid)
-                        inside = zone is not None and point_in_overlap(zone, *gp)
+                        # in the zone = at least zone_overlap_ratio (10 %) of the person's box overlaps it
+                        inside = zone is not None and in_zone_share(*box) >= min_share
                         if st is None:
-                            # new track: the more similar of 1) this camera's gallery (identities not on
-                            # screen) and 2) someone who just stood in the other camera's overlap zone
-                            # (only when this track is in the zone too); otherwise 3) a new global_id
+                            # new track: 1) someone who just stood in the other camera's overlap zone (only
+                            # when this track is in the zone too) -- by position alone in "position" mode,
+                            # otherwise only if they look more alike than anyone in this camera's gallery;
+                            # 2) this camera's gallery (identities not on screen); 3) a new global_id
+                            # identities gone longer than --id-keep are forgotten: someone in similar
+                            # clothes hours later is a new visitor, not the same one back
+                            for gid in [g for g, t in gallery_seen.items() if now - t > args.id_keep]:
+                                gallery.pop(gid, None)
+                                gallery_seen.pop(gid, None)
                             best_id, best_sim = None, -1.0
                             for gid, proto in gallery.items():
                                 sim = float(emb @ proto)
                                 if gid not in active and sim > best_sim:
                                     best_id, best_sim = gid, sim
                             hit = find_handoff_match(shared, order, emb, now, ttl, cross_thr, active) if inside else None
-                            if hit is not None and hit[3] >= best_sim and take_handoff(shared, hit[0]):
-                                st = {"global_id": hit[1], "embedding": hit[2]}
+                            if (hit is not None and (by_position or hit[3] >= best_sim)
+                                    and take_handoff(shared, hit[0])):
+                                # by position the other camera's partial view says little about this one
+                                st = {"global_id": hit[1], "embedding": emb if by_position else hit[2]}
                             elif best_sim >= args.reid_threshold:
                                 st = {"global_id": best_id, "embedding": gallery[best_id]}
                             else:
@@ -548,12 +596,14 @@ def run(order, path, output, args, shared=None):
                                 old = st["global_id"]
                                 handoffs.pop("%d:%d" % (order, old), None)
                                 gallery.pop(old, None)
+                                gallery_seen.pop(old, None)
                                 active.discard(old)
                                 active.add(hit[1])
                                 st["global_id"], st["fresh_until"] = hit[1], -1.0
                         # Established tracks keep their global_id; ReID only refreshes the prototype.
                         st["embedding"] = l2(0.8 * st["embedding"] + 0.2 * emb)
                         gallery[st["global_id"]] = st["embedding"]
+                        gallery_seen[st["global_id"]] = now
                         if zone is not None:
                             # While in the zone the candidate stays fresh (the other camera usually sees the
                             # person before this one loses them); once seen outside the zone it is withdrawn.
@@ -618,6 +668,8 @@ def main():
     p.add_argument("--interval", type=int, default=5, help="write every Nth frame (tracking still runs on all)")
     p.add_argument("--reid-interval", type=int, default=5, help="run ReID on all visible people every Nth frame")
     p.add_argument("--reid-threshold", type=float, default=0.6, help="min cosine similarity to reuse a global_id")
+    p.add_argument("--id-keep", type=float, default=3600,
+                   help="seconds a global_id stays reusable after it was last seen (default 1 h)")
     p.add_argument("--reid-weights", default="solider_swin_small_msmt17.pth")
     p.add_argument("--reid-repo", default="SOLIDER-REID", help="clone of github.com/tinyvision/SOLIDER-REID")
     p.add_argument("--overlap-file", default="overlap_zones.json",

@@ -51,6 +51,38 @@
   #drop{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;
     background:rgba(13,17,23,.82);border:3px dashed var(--acc);font-size:18px;color:var(--acc)}
   body.dragging #drop{display:flex}
+
+  /* ---- stats card (dark chart chrome from the dataviz reference palette) ---- */
+  #stats{position:fixed;left:8px;top:44px;bottom:56px;width:452px;z-index:26;display:none;overflow-y:auto;
+    background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    --viz-surface:#1a1a19;--viz-ink:#ffffff;--viz-ink2:#c3c2b7;--viz-muted:#898781;--viz-grid:#2c2c2a;
+    --viz-axis:#383835;--viz-bar:#3987e5;
+    font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--viz-ink)}
+  body.stats #stats{display:block}
+  body.stats #hud{display:none}
+  #stats h2{margin:0 0 8px;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px}
+  #stats h2 button{margin-left:auto;padding:2px 8px}
+  #stats h4{margin:14px 0 2px;font-size:12px;font-weight:600;color:var(--viz-ink)}
+  #stats .sub{color:var(--viz-muted);font-size:11px;margin:0 0 4px}
+  #stats .filters{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  #stats .filters select{flex:0 0 auto}
+  #stats .seg button{padding:4px 9px}
+  #stats .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
+  #stats .tile{background:var(--viz-surface);border:1px solid rgba(255,255,255,.10);border-radius:6px;padding:7px 9px}
+  #stats .tile .k{color:var(--viz-ink2);font-size:11px}
+  #stats .tile .v{font-size:20px;font-weight:600;margin-top:1px}
+  #stats .tile .n{color:var(--viz-muted);font-size:11px}
+  #stats .chart{background:var(--viz-surface);border-radius:6px;padding:6px 4px 2px}
+  #stats svg text{font:10px system-ui,sans-serif;fill:var(--viz-muted);font-variant-numeric:tabular-nums}
+  #stats .legend{display:flex;align-items:center;gap:6px;color:var(--viz-ink2);font-size:11px;margin-top:4px}
+  #stats .legend i{flex:1;height:8px;border-radius:4px}
+  #stats table{width:100%;border-collapse:collapse;font-size:11px;font-variant-numeric:tabular-nums;margin-top:4px}
+  #stats td,#stats th{padding:2px 6px;border-bottom:1px solid var(--viz-grid);text-align:right;color:var(--viz-ink2)}
+  #stats th{color:var(--viz-muted);font-weight:500}
+  #stats td:first-child,#stats th:first-child{text-align:left}
+  #stats .empty{color:var(--viz-muted);padding:16px 0}
+  #vizTip{position:fixed;z-index:60;pointer-events:none;display:none;background:#1a1a19;color:#fff;
+    border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:5px 8px;font:12px system-ui,sans-serif;white-space:pre}
 </style>
 </head>
 <body>
@@ -60,8 +92,20 @@
   <button data-view="cctv2">CCTV 2</button>
   <button data-view="orbit">자유 시점</button>
   <button data-view="top">위에서</button>
+  <button id="statsBtn" title="날짜·시간대별 방문자, 체류 시간, 히트맵">통계</button>
 </div>
 <div id="hud"></div>
+<div id="stats">
+  <h2>방문 통계 <button id="statsClose" title="닫기">✕</button></h2>
+  <div class="filters">
+    <select id="statsDate" title="날짜"></select>
+    <span class="seg" title="바닥 히트맵">
+      <button data-heat="off">히트맵 끄기</button><button data-heat="dwell">체류 시간</button><button data-heat="path">동선</button>
+    </span>
+  </div>
+  <div id="statsBody"></div>
+</div>
+<div id="vizTip"></div>
 <button id="toggle" title="패널 열기/닫기">☰</button>
 
 <div id="panel">
@@ -220,7 +264,9 @@ function hitPlane(u, v, w, h, plane, out){
    Metres, floor-plan coordinates (A-01: 8,930 x 4,660, ceiling 2,100): x = plan X from the left wall,
    z = -(plan Y from the front wall). Camera poses were fitted so the 10-06 16:35 screenshots' floor-wall
    lines land on the plan walls; kiosks, doors and the window were back-projected from the photos.
-   The front-wall columns C1-C3, the duct and the blue box are left out: they only blocked the views. */
+   The front-wall columns C1-C3, the duct and the blue box are left out: they only blocked the views.
+   The large block in the right space stands where the plan draws it (1.54-2.71 m from the front wall),
+   on the passage from CCTV 2 to CCTV 1; people crossing it turn it see-through (updatePassThrough). */
 const ROOM = { x0:0, x1:8.93, z0:-4.66, z1:0, ceil:2.1 };
 const RC = { x:(ROOM.x0 + ROOM.x1)/2, z:(ROOM.z0 + ROOM.z1)/2 };
 const DESK_Y = 0.72;
@@ -233,7 +279,7 @@ const ITEMS = [
   { t:'kioskF', b:[3.09, 3.65, 0, 1.81, -4.66, -4.15], scr:[1.14, 1.76] },
   { t:'kioskF', b:[4.05, 4.98, 0, 1.62, -4.66, -4.18], scr:[1.04, 1.36], plinth:true },
   { t:'block', b:[5.415, 5.53, 0, 2.1, -4.66, -2.29], color:0xe8eaec },
-  { t:'block', b:[5.66, 6.49, 0, 2.1, -2.71, -1.54], color:0x9fb0c4 },
+  { t:'block', b:[5.66, 6.49, 0, 2.1, -2.71, -1.54], color:0x9fb0c4 },     // large block, where the plan draws it
   { t:'block', b:[8.7, 8.93, 0, 2.1, -4.66, -2.31], color:0xf2f2f0 },
   { t:'window', b:[8.925, 8.93, 0.8, 1.46, -1.96, -1.39] },
   { t:'block', b:[8.88, 8.93, 0, 1.9, -0.6, 0], color:0x9b6b34 },
@@ -443,11 +489,39 @@ function buildItem(it){
   }
 }
 buildRoom();
+for (const o of envGroup.children) o.userData.room = true;      // floor, ceiling, outer walls
 ITEMS.forEach(buildItem);
 // beam, bulkhead and ceiling lights block the free/top views; they are only drawn for the CCTV view
 const ceilGroup = new THREE.Group(); envScene.add(ceilGroup);
 for (const grp of [envGroup, edgeGroup])
   for (const o of [...grp.children]) if (new THREE.Box3().setFromObject(o).min.y >= 2.4) ceilGroup.add(o);
+
+/* ---------- objects someone is walking through turn see-through (free/top views) ----------
+   Positions come from the cameras alone, so a person can end up inside a block (a sketched plan,
+   calibration error). Each solid item gets its own material; while a person's feet are within its
+   footprint, or their shoulders/hips inside it, it is drawn at 25 % so they stay visible. Hands are
+   left out so touching a kiosk screen doesn't make it flicker. */
+const SOLIDS = [];
+for (const m of envGroup.children){
+  if (!m.isMesh || m.userData.room) continue;
+  const box = new THREE.Box3().setFromObject(m);
+  if (box.max.y - box.min.y < 0.05) continue;                    // floor joints and other flat marks
+  m.material = m.material.clone();
+  SOLIDS.push({ m, box, opacity:m.material.opacity, transparent:m.material.transparent, depthWrite:m.material.depthWrite, on:false });
+}
+const PASS_PAD = 0.05, PASS_JOINTS = [5, 6, 11, 12];
+function updatePassThrough(people){
+  for (const s of SOLIDS){
+    const b = s.box, hit = people.some(e =>
+      (e.anchor.x > b.min.x - PASS_PAD && e.anchor.x < b.max.x + PASS_PAD && e.anchor.z > b.min.z - PASS_PAD && e.anchor.z < b.max.z + PASS_PAD) ||
+      PASS_JOINTS.some(j => e.joints[j] && b.containsPoint(e.joints[j])));
+    if (hit === s.on) continue;
+    s.on = hit;
+    const mm = s.m.material;
+    mm.transparent = hit || s.transparent; mm.opacity = hit ? 0.25 : s.opacity; mm.depthWrite = hit ? false : s.depthWrite;
+    mm.needsUpdate = true; envDirty = true;
+  }
+}
 
 /* ============================== LENS UNIFORMS ============================== */
 const lensU = {
@@ -729,6 +803,7 @@ async function readAnalysis(stream, size, name){
                 (sa ? `\n시작 ${sa[1].replace('T', ' ')}` : '') + '\n' + (g ? `ReID global_id ${g}명` : 'global_id 없음 → ByteTrack track_id로 표시');
   showStatus();
   renderIdChips();
+  summarizeForStats(rig, name);
   $('seek').max = totalDur().toFixed(3);
   setTime(Math.min(play.t, totalDur()));
 }
@@ -1012,7 +1087,9 @@ function drawPeople(t){
     counts[r.idx] = got.length; all.push(...got);
   }
   useRig(activeRig());
-  for (const e of view === 'cctv' ? all : mergePeople(all)) renderPerson(e);
+  const drawn = view === 'cctv' ? all : mergePeople(all);
+  for (const e of drawn) renderPerson(e);
+  updatePassThrough(view === 'cctv' ? [] : drawn);   // CCTV views draw people over the room anyway
   return counts;
 }
 
@@ -1127,6 +1204,250 @@ function renderPerson({ vkey, key, anchor, joints, guess, head:gz, trail }){
   }
   if (trail && trail.length > 1){ v.trail.geometry.dispose(); v.trail.geometry = new THREE.BufferGeometry().setFromPoints(trail); v.trail.visible = true; }
 }
+
+/* ============================== STATS ==============================
+   Every analysis file loaded is boiled down to (wall time, global_id, floor x, z) samples -- the same
+   smoothed floor positions the replay uses -- and kept even after the next file replaces it for
+   playback, so a whole month can be dropped in at once. A visitor is one global_id within one run
+   (both cameras' files of a run share the id counter, so a person seen by both counts once).
+   Time is binned into 0.5 s slots per visitor: dwell = slots present x 0.5 s, the floor position of a
+   slot is the mean of what either camera saw. Ids present for less than 3 s are dropped as noise. */
+const SLOT_S = 0.5, MIN_VISIT_S = 3, CELL_M = 0.2, PATH_GAP_S = 2;
+const STATS = { files:new Map(), visitors:null, date:'all', hour:null, heat:'dwell', open:false, table:false };
+function runKeyOf(name, startedAt){
+  const m = /(\d{6}_\d{4})/.exec(name || '');
+  return m ? m[1] : new Date(startedAt).toISOString().slice(0, 16);
+}
+function summarizeForStats(rig, name){
+  const A = rig.analysis;
+  if (!A.loaded || A.startedAt === null) return;
+  useRig(rig);
+  anchorsAt(0);                                   // smoothed floor positions for every frame
+  const t0 = A.startedAt / 1000, out = [];
+  A.frames.forEach((f, i) => {
+    const m = anchorCache[i];
+    for (const p of f.p){
+      if (p.key[0] !== 'G') continue;
+      const g = m.get(p.key);
+      if (g) out.push(t0 + f.t, +p.key.slice(1), g.x, g.z);
+    }
+  });
+  STATS.files.set(name, { cam:rig.idx, run:runKeyOf(name, A.startedAt), samples:Float64Array.from(out) });
+  STATS.visitors = null;
+  useRig(activeRig());
+  if (STATS.open) renderStats();
+}
+const pad2 = n => String(n).padStart(2, '0');
+const dateOf = sec => { const d = new Date(sec * 1000); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
+function buildVisitors(){
+  const byKey = new Map();                         // run:gid -> Map(slot -> [sx, sz, n])
+  for (const f of STATS.files.values()){
+    const s = f.samples;
+    for (let i = 0; i < s.length; i += 4){
+      const key = f.run + ':' + s[i+1], slot = Math.floor(s[i] / SLOT_S);
+      let m = byKey.get(key); if (!m) byKey.set(key, m = new Map());
+      const c = m.get(slot);
+      if (c){ c[0] += s[i+2]; c[1] += s[i+3]; c[2]++; } else m.set(slot, [s[i+2], s[i+3], 1]);
+    }
+  }
+  const out = [];
+  for (const m of byKey.values()){
+    const dwell = m.size * SLOT_S;
+    if (dwell < MIN_VISIT_S) continue;
+    const slots = [...m.entries()].sort((a, b) => a[0] - b[0])
+      .map(([k, c]) => ({ t:k * SLOT_S, h:new Date(k * SLOT_S * 1000).getHours(), x:c[0] / c[2], z:c[1] / c[2] }));
+    const first = slots[0].t;
+    out.push({ first, date:dateOf(first), hour:new Date(first * 1000).getHours(), dwell, slots });
+  }
+  return out;
+}
+
+/* ---------- floor heatmaps: a canvas texture laid on the floor (also baked into the CCTV views) ---------- */
+const HEAT_NX = Math.ceil((ROOM.x1 - ROOM.x0) / CELL_M), HEAT_NZ = Math.ceil((ROOM.z1 - ROOM.z0) / CELL_M);
+const heatCanvas = Object.assign(document.createElement('canvas'), { width:HEAT_NX, height:HEAT_NZ });
+const heatTex = new THREE.CanvasTexture(heatCanvas); heatTex.colorSpace = THREE.SRGBColorSpace;
+const heatMesh = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.x1 - ROOM.x0, ROOM.z1 - ROOM.z0),
+  new THREE.MeshBasicMaterial({ map:heatTex, transparent:true, depthWrite:false }));
+heatMesh.rotation.x = -Math.PI/2; heatMesh.position.set(RC.x, 0.015, RC.z); heatMesh.renderOrder = 1; heatMesh.visible = false;
+envScene.add(heatMesh);
+// sequential blue ramp (reference palette steps 200 -> 700); zero stays transparent
+const HEAT_RAMP = ['#9ec5f4', '#5598e7', '#256abf', '#104281', '#0d366b'].map(h => new THREE.Color(h));
+function rampAt(v){
+  const x = Math.min(0.9999, Math.max(0, v)) * (HEAT_RAMP.length - 1), i = Math.floor(x);
+  return HEAT_RAMP[i].clone().lerp(HEAT_RAMP[i + 1], x - i);
+}
+const cellOf = (x, z) => {
+  const c = Math.floor((x - ROOM.x0) / CELL_M), r = Math.floor((z - ROOM.z0) / CELL_M);
+  return c >= 0 && c < HEAT_NX && r >= 0 && r < HEAT_NZ ? r * HEAT_NX + c : -1;
+};
+function heatGrids(vs, hour){
+  const dwell = new Float32Array(HEAT_NX * HEAT_NZ), path = new Float32Array(HEAT_NX * HEAT_NZ);
+  for (const v of vs){
+    const seen = new Set();
+    let prev = null;
+    for (const s of v.slots){
+      if (hour !== null && s.h !== hour){ prev = null; continue; }
+      const c = cellOf(s.x, s.z);
+      if (c >= 0){ dwell[c] += SLOT_S; seen.add(c); }
+      if (prev && s.t - prev.t <= PATH_GAP_S){           // walk the segment so a fast pass still marks its cells
+        const n = Math.ceil(Math.hypot(s.x - prev.x, s.z - prev.z) / (CELL_M / 2));
+        for (let k = 1; k < n; k++){ const q = cellOf(prev.x + (s.x - prev.x) * k / n, prev.z + (s.z - prev.z) * k / n); if (q >= 0) seen.add(q); }
+      }
+      prev = s;
+    }
+    for (const c of seen) path[c]++;
+  }
+  return { dwell, path };
+}
+function blur3(g){                                 // light 3x3 smoothing so the 20 cm cells read as a field
+  const o = new Float32Array(g.length), K = [1, 2, 1];
+  for (let r = 0; r < HEAT_NZ; r++) for (let c = 0; c < HEAT_NX; c++){
+    let s = 0, w = 0;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++){
+      const rr = r + dr, cc = c + dc; if (rr < 0 || cc < 0 || rr >= HEAT_NZ || cc >= HEAT_NX) continue;
+      const k = K[dr + 1] * K[dc + 1]; s += g[rr * HEAT_NX + cc] * k; w += k;
+    }
+    o[r * HEAT_NX + c] = s / w;
+  }
+  return o;
+}
+function paintHeat(grid){                          // -> max value represented (98th percentile, so one hot cell can't wash out the rest)
+  const g = blur3(grid), nz = [...g].filter(v => v > 0).sort((a, b) => a - b);
+  const top = nz.length ? nz[Math.floor(nz.length * 0.98)] || nz[nz.length - 1] : 0;
+  const ctx = heatCanvas.getContext('2d'), img = ctx.createImageData(HEAT_NX, HEAT_NZ);
+  for (let i = 0; i < g.length; i++){
+    if (!(g[i] > 0) || !top) continue;
+    const v = Math.min(1, g[i] / top), col = rampAt(v);
+    img.data[i*4] = col.r * 255; img.data[i*4+1] = col.g * 255; img.data[i*4+2] = col.b * 255;
+    img.data[i*4+3] = 255 * (0.25 + 0.6 * v);
+  }
+  ctx.putImageData(img, 0, 0);
+  heatTex.needsUpdate = true; envDirty = true;
+  return top;
+}
+
+/* ---------- the card ---------- */
+const fmtDur = s => s >= 3600 ? `${Math.floor(s / 3600)}시간 ${Math.round(s % 3600 / 60)}분`
+                  : s >= 60 ? `${Math.floor(s / 60)}분 ${pad2(Math.round(s % 60))}초` : `${Math.round(s)}초`;
+const tip = $('vizTip');
+function showTip(e, text){ tip.textContent = text; tip.style.display = 'block'; tip.style.left = (e.clientX + 12) + 'px'; tip.style.top = (e.clientY + 12) + 'px'; }
+function hideTip(){ tip.style.display = 'none'; }
+/* one-series bar chart: thin bars with 4 px rounded tops on the baseline, recessive grid, hover tooltip,
+   optional pick (click) with the others dimmed */
+function barChart(items, { fmt, picked, onPick }){
+  const W = 420, H = 120, L = 36, B = 18, T = 8, n = items.length;
+  const max = Math.max(1e-9, ...items.map(d => d.value));
+  const step = Math.pow(10, Math.floor(Math.log10(max))), nice = [1, 2, 2.5, 5, 10].map(m => m * step).find(m => m >= max) || max;
+  const y = v => T + (H - T - B) * (1 - v / nice), cw = (W - L) / n, bw = Math.max(2, Math.min(18, cw - 4));
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">`;
+  for (const g of [0, nice / 2, nice]) svg += `<line x1="${L}" x2="${W}" y1="${y(g)}" y2="${y(g)}" stroke="var(--viz-grid)"/><text x="${L - 4}" y="${y(g) + 3}" text-anchor="end">${fmt(g, true)}</text>`;
+  svg += `<line x1="${L}" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="var(--viz-axis)"/>`;
+  const every = Math.ceil(n / 12);
+  items.forEach((d, i) => {
+    const cx = L + cw * (i + 0.5), top = y(d.value), x0 = cx - bw / 2, r = Math.min(4, bw / 2, y(0) - top);
+    const dim = picked !== null && picked !== undefined && picked !== d.key;
+    if (d.value > 0) svg += `<path d="M${x0},${y(0)}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x0 + bw - r}Q${x0 + bw},${top} ${x0 + bw},${top + r}V${y(0)}Z" fill="var(--viz-bar)" opacity="${dim ? 0.3 : 1}"/>`;
+    if (i % every === 0) svg += `<text x="${cx}" y="${H - 5}" text-anchor="middle">${d.label}</text>`;
+    svg += `<rect class="hit" data-i="${i}" x="${L + cw * i}" y="0" width="${cw}" height="${H - B}" fill="transparent" style="cursor:${onPick ? 'pointer' : 'default'}"/>`;
+  });
+  const box = document.createElement('div'); box.className = 'chart'; box.innerHTML = svg + '</svg>';
+  box.querySelectorAll('.hit').forEach(h => {
+    const d = items[+h.dataset.i];
+    h.addEventListener('mousemove', e => showTip(e, d.tip));
+    h.addEventListener('mouseleave', hideTip);
+    if (onPick) h.addEventListener('click', () => { hideTip(); onPick(d.key); });
+  });
+  return box;
+}
+function renderStats(){
+  const body = $('statsBody');
+  if (!STATS.visitors) STATS.visitors = buildVisitors();
+  const all = STATS.visitors, dates = [...new Set(all.map(v => v.date))].sort();
+  const sel = $('statsDate');
+  sel.innerHTML = `<option value="all">전체 날짜 (${dates.length}일)</option>` + dates.map(d => `<option value="${d}">${d}</option>`).join('');
+  if (STATS.date !== 'all' && !dates.includes(STATS.date)) STATS.date = 'all';
+  sel.value = STATS.date;
+  document.querySelectorAll('#stats [data-heat]').forEach(b => b.classList.toggle('on', b.dataset.heat === STATS.heat));
+  body.innerHTML = '';
+  if (!all.length){
+    body.innerHTML = `<div class="empty">분석 결과(.json.gz)를 불러오면 통계가 표시됩니다. 여러 날짜의 파일을 한꺼번에 끌어다 놓을 수 있습니다.<br>(시작 시각 started_at 이 기록된 파일만, ${MIN_VISIT_S}초 미만 ID 제외)</div>`;
+    heatMesh.visible = false; envDirty = true;
+    return;
+  }
+  const vs = all.filter(v => STATS.date === 'all' || v.date === STATS.date);
+  const hourVs = STATS.hour === null ? vs : vs.filter(v => v.hour === STATS.hour);
+  const avg = a => a.length ? a.reduce((s, v) => s + v.dwell, 0) / a.length : 0;
+
+  const tiles = document.createElement('div'); tiles.className = 'tiles';
+  const tile = (k, v, n) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="n">${n}</div></div>`;
+  const scope = STATS.hour === null ? (STATS.date === 'all' ? '전체 기간' : STATS.date) : `${STATS.hour}시 입장`;
+  tiles.innerHTML = tile('방문자', hourVs.length.toLocaleString() + '명', scope)
+    + tile('평균 체류', fmtDur(avg(hourVs)), '중앙값 ' + fmtDur((s => s.length ? s[s.length >> 1] : 0)(hourVs.map(v => v.dwell).sort((a, b) => a - b))))
+    + tile('최장 체류', fmtDur(Math.max(0, ...hourVs.map(v => v.dwell))), STATS.date === 'all' && dates.length > 1 ? `일평균 ${Math.round(vs.length / dates.length)}명` : '');
+  body.appendChild(tiles);
+
+  const hours = vs.map(v => v.hour), h0 = Math.min(9, ...hours), h1 = Math.max(19, ...hours);
+  const byHour = [];
+  for (let h = h0; h <= h1; h++){
+    const g = vs.filter(v => v.hour === h);
+    byHour.push({ key:h, label:String(h), n:g.length, avg:avg(g) });
+  }
+  const pick = h => { STATS.hour = STATS.hour === h ? null : h; renderStats(); };
+  const head = (t, sub) => { const e = document.createElement('div'); e.innerHTML = `<h4>${t}</h4><p class="sub">${sub}</p>`; body.appendChild(e); };
+  head('시간대별 방문자', '처음 나타난 시각 기준 · 막대를 누르면 그 시간대만 봅니다');
+  body.appendChild(barChart(byHour.map(d => ({ key:d.key, label:d.label, value:d.n, tip:`${d.key}시 · 방문자 ${d.n}명` })),
+    { fmt:(v, axis) => axis ? Math.round(v) : v + '명', picked:STATS.hour, onPick:pick }));
+  head('시간대별 평균 체류 시간', '그 시간대에 들어온 방문자의 평균 (분)');
+  body.appendChild(barChart(byHour.map(d => ({ key:d.key, label:d.label, value:d.avg / 60, tip:`${d.key}시 · 평균 체류 ${fmtDur(d.avg)} (${d.n}명)` })),
+    { fmt:v => v >= 10 || v === 0 ? Math.round(v) : v.toFixed(1), picked:STATS.hour, onPick:pick }));
+
+  if (STATS.date === 'all' && dates.length > 1){
+    const byDate = dates.map(d => { const g = all.filter(v => v.date === d); return { key:d, label:d.slice(5), n:g.length, avg:avg(g) }; });
+    head('날짜별 방문자', '막대를 누르면 그 날짜로 좁힙니다');
+    body.appendChild(barChart(byDate.map(d => ({ key:d.key, label:d.label, value:d.n, tip:`${d.key} · 방문자 ${d.n}명 · 평균 체류 ${fmtDur(d.avg)}` })),
+      { fmt:(v, axis) => axis ? Math.round(v) : v + '명', picked:null, onPick:d => { STATS.date = d; STATS.hour = null; renderStats(); } }));
+  }
+
+  // heatmap on the floor + its legend
+  const grids = heatGrids(vs, STATS.hour);
+  heatMesh.visible = STATS.heat !== 'off';
+  if (heatMesh.visible){
+    const top = paintHeat(STATS.heat === 'dwell' ? grids.dwell : grids.path);
+    const unit = STATS.heat === 'dwell' ? `${fmtDur(top)} 이상` : `${Math.round(top)}명 이상`;
+    head(STATS.heat === 'dwell' ? '체류 시간 히트맵' : '동선 히트맵',
+         (STATS.heat === 'dwell' ? '바닥 20 cm 칸마다 머문 시간의 합' : '바닥 20 cm 칸을 지나간 방문자 수') +
+         (STATS.hour === null ? '' : ` · ${STATS.hour}시대 위치만`) + ' · 3D 화면 바닥에 표시');
+    const lg = document.createElement('div'); lg.className = 'legend';
+    lg.innerHTML = `<span>적음</span><i style="background:linear-gradient(90deg,${HEAT_RAMP.map(c => '#' + c.getHexString()).join(',')})"></i><span>${unit}</span>`;
+    body.appendChild(lg);
+  } else envDirty = true;
+
+  // table view (accessibility / exact numbers)
+  const tb = document.createElement('div');
+  tb.innerHTML = `<h4><a href="#" id="statsTableToggle" style="color:var(--acc)">${STATS.table ? '표 숨기기' : '표로 보기'}</a></h4>`;
+  body.appendChild(tb);
+  if (STATS.table){
+    const t = document.createElement('table');
+    t.innerHTML = '<tr><th>시간대</th><th>방문자</th><th>평균 체류</th></tr>' +
+      byHour.map(d => `<tr><td>${d.key}시</td><td>${d.n}</td><td>${d.n ? fmtDur(d.avg) : '-'}</td></tr>`).join('');
+    body.appendChild(t);
+  }
+  $('statsTableToggle').onclick = e => { e.preventDefault(); STATS.table = !STATS.table; renderStats(); };
+  const files = [...STATS.files.keys()];
+  const note = document.createElement('p'); note.className = 'sub'; note.style.marginTop = '12px';
+  note.textContent = `불러온 파일 ${files.length}개 · 방문자 = 같은 실행의 같은 global_id (두 카메라 합산) · ${MIN_VISIT_S}초 미만 제외 · 체류 = 어느 카메라에든 보인 시간`;
+  body.appendChild(note);
+}
+function setStatsOpen(on){
+  STATS.open = on;
+  document.body.classList.toggle('stats', on);
+  $('statsBtn').classList.toggle('on', on);
+  if (on){ setView('top'); renderStats(); } else { heatMesh.visible = false; envDirty = true; hideTip(); }
+}
+$('statsBtn').onclick = () => setStatsOpen(!STATS.open);
+$('statsClose').onclick = () => setStatsOpen(false);
+$('statsDate').onchange = e => { STATS.date = e.target.value; STATS.hour = null; renderStats(); };
+document.querySelectorAll('#stats [data-heat]').forEach(b => b.onclick = () => { STATS.heat = b.dataset.heat; renderStats(); });
 
 /* ============================== PLAYBACK ============================== */
 const play = { on:false, t:0, speed:1 };
@@ -1252,13 +1573,13 @@ function setView(v){                              // 'cctv1' / 'cctv2' / 'orbit'
   const m = /^cctv(\d)?$/.exec(v);
   if (m){ selectRig(m[1] ? +m[1] - 1 : rigIdx); v = 'cctv' + (rigIdx + 1); }
   view = m ? 'cctv' : v;
-  document.querySelectorAll('#views button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
+  document.querySelectorAll('#views button[data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === v));
   if (v === 'top'){ orbitCam.position.set(RC.x, 15.5, RC.z + 0.001); controls.target.set(RC.x, 0, RC.z); }
   if (v === 'orbit' && orbitCam.position.y > 15){ orbitCam.position.set(RC.x + 6, 8, RC.z + 9); controls.target.set(RC.x, 0.6, RC.z); }
   controls.enabled = view !== 'cctv';
   resize();
 }
-document.querySelectorAll('#views button').forEach(b => b.onclick = () => setView(b.dataset.view));
+document.querySelectorAll('#views button[data-view]').forEach(b => b.onclick = () => setView(b.dataset.view));
 
 function resize(){
   const w = innerWidth, h = innerHeight;
@@ -1325,6 +1646,8 @@ setView(['cctv', 'cctv1', 'cctv2', 'orbit', 'top'].includes(qs.get('view')) ? qs
 if (qs.get('t')) play.t = +qs.get('t');
 for (const k of ['photo', 'env', 'bend']) if (qs.has(k)){ const el = $(k === 'bend' ? 'bend' : k + 'Mix'); el.value = qs.get(k); el.dispatchEvent(new Event('input')); }
 showCamFields();
+if (['off', 'dwell', 'path'].includes(qs.get('heat'))) STATS.heat = qs.get('heat');
+if (qs.has('stats')) setStatsOpen(true);
 (async () => { for (const u of qs.getAll('data')) await loadAnalysisUrl(u); })();   // ?data=a.json.gz&data=b.json.gz
 requestAnimationFrame(loop);
 </script>
