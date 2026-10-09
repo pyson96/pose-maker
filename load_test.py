@@ -4,6 +4,7 @@ anything die?
 
     python load_test.py                 # 120 s, cameras.txt + each camera's stream7 -> 4 inputs
     python load_test.py --seconds 60 --variant stream7
+    python load_test.py --inputs clip.mp4 clip.mp4 clip.mp4 clip.mp4   # files: as fast as the PC can go
 
 The four inputs are the cameras.txt URLs plus, for each, the same URL with its stream path swapped
 for --variant (e.g. .../stream2 -> .../stream7). make_analysis.py runs on them for --seconds while
@@ -58,16 +59,21 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=float, default=120, help="analysis time per run (model loading not included)")
     ap.add_argument("--variant", default="stream7", help="stream path added for each camera")
+    ap.add_argument("--inputs", nargs="+", help="use these inputs instead (videos or streams, repeats allowed)")
     ap.add_argument("--model", default="yolo26l-pose.pt")
+    ap.add_argument("--reid-interval", type=int, default=5, help="passed to make_analysis.py")
     ap.add_argument("--force", action="store_true", help="start even if another analysis is running")
     args = ap.parse_args()
 
-    base = default_inputs()
-    if not base:
-        sys.exit("cameras.txt is missing or empty")
-    extra = [re.sub(r"/stream\d+$", "/" + args.variant, u) if re.search(r"/stream\d+$", u)
-             else u.rstrip("/") + "/" + args.variant for u in base]
-    inputs = base + extra
+    if args.inputs:
+        inputs = args.inputs
+    else:
+        base = default_inputs()
+        if not base:
+            sys.exit("cameras.txt is missing or empty")
+        extra = [re.sub(r"/stream\d+$", "/" + args.variant, u) if re.search(r"/stream\d+$", u)
+                 else u.rstrip("/") + "/" + args.variant for u in base]
+        inputs = base + extra
     if analysis_procs() and not args.force:
         sys.exit("another make_analysis.py is running -- not starting (use --force to override)")
 
@@ -76,10 +82,12 @@ def main():
     print("inputs (%d):" % len(inputs))
     for i, u in enumerate(inputs, 1):
         print("  [%d] %s" % (i, mask(u)))
-    print("output -> %s, %.0f s per camera\n" % (out_dir, args.seconds), flush=True)
+    print("output -> %s, %.0f s per camera, model %s, reid every %d frames\n"
+          % (out_dir, args.seconds, args.model, args.reid_interval), flush=True)
 
     cmd = [sys.executable, os.path.join(HERE, "make_analysis.py"), "--input", *inputs,
-           "--duration", str(args.seconds), "--out-dir", out_dir, "--model", args.model]
+           "--duration", str(args.seconds), "--out-dir", out_dir, "--model", args.model,
+           "--reid-interval", str(args.reid_interval)]
     started = time.time()
     proc = subprocess.Popen(cmd, cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace")
