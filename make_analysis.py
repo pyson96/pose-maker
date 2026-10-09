@@ -186,15 +186,39 @@ def reopen_capture(path, should_stop, tag):
     return None
 
 
-def load_overlap_config(path):
-    """overlap_zones.json -> dict, or None if the file is missing."""
+def load_overlap_config(path, n_cams=2):
+    """overlap_zones.json -> dict with a "pairs" list, or None if the file is missing.
+
+    Two layouts are read:
+      * pairs (any number of cameras), cameras numbered by --input / cameras.txt order:
+          {"pairs": [{"cameras": [1, 4], "polygons": [[[x, y], ...], [[x, y], ...]]}, ...], ...}
+        polygons[k] is drawn on cameras[k]'s picture.
+      * the original two-camera layout {"camera1": {"polygon": ...}, "camera2": {...}} = pair (1, 2).
+    Pairs naming a camera that isn't running (e.g. a 4-camera file used with 2 inputs) are skipped.
+    """
     if not os.path.isfile(path):
         return None
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
-    for cam in ("camera1", "camera2"):
-        if len(cfg.get(cam, {}).get("polygon", [])) < 3:
-            raise SystemExit("%s: %s needs a polygon with at least 3 points" % (path, cam))
+    return normalize_overlap_config(cfg, n_cams, path)
+
+
+def normalize_overlap_config(cfg, n_cams, path):
+    if "pairs" not in cfg:
+        for cam in ("camera1", "camera2"):
+            if len(cfg.get(cam, {}).get("polygon", [])) < 3:
+                raise SystemExit("%s: %s needs a polygon with at least 3 points" % (path, cam))
+        cfg["pairs"] = [{"cameras": [1, 2], "polygons": [cfg["camera1"]["polygon"], cfg["camera2"]["polygon"]]}]
+    pairs = []
+    for p in cfg["pairs"]:
+        a, b = p["cameras"]
+        if a == b or len(p["polygons"]) != 2 or any(len(q) < 3 for q in p["polygons"]):
+            raise SystemExit("%s: pair %s needs two different cameras and two polygons of >= 3 points" % (path, p["cameras"]))
+        if max(a, b) > n_cams or min(a, b) < 1:
+            log("overlap pair %d-%d skipped: only %d input(s)" % (a, b, n_cams))
+            continue
+        pairs.append({"cameras": [int(a), int(b)], "polygons": p["polygons"]})
+    cfg["pairs"] = pairs
     cfg.setdefault("handoff_ttl", DEFAULT_HANDOFF_TTL)
     cfg.setdefault("cross_reid_threshold", DEFAULT_CROSS_REID_THRESHOLD)
     cfg.setdefault("handoff_mode", DEFAULT_HANDOFF_MODE)
@@ -326,9 +350,16 @@ def allocate_global_id(shared, local_counter):
         return shared["next_gid"].value
 
 
-def find_handoff_match(shared, camera, emb, now, ttl, threshold, active, below=None):
-    """Best recent overlap candidate from the OTHER camera -> (key, global_id, embedding, sim) or None.
+def handoff_key(src, dst, gid):
+    """Candidate "global_id gid, seen in src's zone shared with dst" -- one per camera pair direction."""
+    return "%d>%d:%d" % (src, dst, gid)
 
+
+def find_handoff_match(shared, camera, emb, now, ttl, threshold, active, partners, below=None):
+    """Best recent overlap candidate handed to this camera -> (key, global_id, embedding, sim) or None.
+
+    partners: the cameras whose shared zone this track is in (seen from this camera); only candidates
+    those cameras published toward this one count.
     threshold None (handoff_mode "position"): whoever stood in the other camera's zone within ttl is
     taken whatever they look like -- in the passage only a head and a bit of shoulder show, so the
     appearance can't be trusted. Similarity then only picks between several candidates.
@@ -336,11 +367,12 @@ def find_handoff_match(shared, camera, emb, now, ttl, threshold, active, below=N
     once the other camera already carries this id (the two cameras have agreed on it).
     """
     best, best_sim = None, -1.0
-    cands = [c for c in shared["handoffs"].values() if c["camera"] != camera]  # one IPC round trip
+    cands = [c for c in shared["handoffs"].values()                       # one IPC round trip
+             if c.get("to") == camera and c["camera"] in partners]
     if below is not None and any(c["global_id"] == below for c in cands):
         return None
     for cand in cands:
-        key = "%d:%d" % (cand["camera"], cand["global_id"])
+        key = handoff_key(cand["camera"], camera, cand["global_id"])
         if cand["global_id"] in active:
             continue
         if below is not None and cand["global_id"] >= below:
@@ -483,9 +515,14 @@ def run(order, path, output, args, shared=None):
     local_gid = [0]    # global_id counter when this is the only camera
     routes = {}        # track_id -> sightings summary for the "people" section (see update_route)
     zones = shared.get("zones") if shared else None
-    zone = np.array(zones["camera%d" % order]["polygon"], np.float32) if zones else None
+    # this camera's side of every overlap pair it belongs to: [(other camera, coverage test)]
+    my_zones = []
+    for p in (zones or {}).get("pairs", []):
+        if order in p["cameras"]:
+            k = p["cameras"].index(order)
+            my_zones.append((p["cameras"][1 - k], zone_coverage(np.array(p["polygons"][k], np.float32), w, h)))
+    zone = my_zones or None
     if zone is not None:
-        in_zone_share = zone_coverage(zone, w, h)
         min_share = float(zones.get("zone_overlap_ratio", DEFAULT_ZONE_OVERLAP))
         ttl = float(zones["handoff_ttl"])
         by_position = zones.get("handoff_mode", DEFAULT_HANDOFF_MODE) == "position"
@@ -498,6 +535,7 @@ def run(order, path, output, args, shared=None):
         "coordinate_system": COORDINATE_SYSTEM,
         "camera_id": order,
         "overlap_enabled": zone is not None,
+        "overlap_partners": [o for o, _ in my_zones],
     }
     dump = lambda o: json.dumps(o, separators=(",", ":"))
 
@@ -558,8 +596,10 @@ def run(order, path, output, args, shared=None):
                     active = {st["global_id"] for st in track_state.values() if now - st["last_seen"] <= TRACK_GRACE_SEC}
                     for tid, emb, box in zip(tids, reid_embed(reid, crops) if crops else [], boxes):
                         st = track_state.get(tid)
-                        # in the zone = at least zone_overlap_ratio (10 %) of the person's box overlaps it
-                        inside = zone is not None and in_zone_share(*box) >= min_share
+                        # in a zone = at least zone_overlap_ratio (10 %) of the person's box overlaps it;
+                        # partners = the cameras whose shared zone that is
+                        partners = {o for o, cover in my_zones if cover(*box) >= min_share}
+                        inside = bool(partners)
                         if st is None:
                             # new track: 1) someone who just stood in the other camera's overlap zone (only
                             # when this track is in the zone too) -- by position alone in "position" mode,
@@ -575,7 +615,8 @@ def run(order, path, output, args, shared=None):
                                 sim = float(emb @ proto)
                                 if gid not in active and sim > best_sim:
                                     best_id, best_sim = gid, sim
-                            hit = find_handoff_match(shared, order, emb, now, ttl, cross_thr, active) if inside else None
+                            hit = (find_handoff_match(shared, order, emb, now, ttl, cross_thr, active, partners)
+                                   if inside else None)
                             if (hit is not None and (by_position or hit[3] >= best_sim)
                                     and take_handoff(shared, hit[0])):
                                 # by position the other camera's partial view says little about this one
@@ -590,11 +631,12 @@ def run(order, path, output, args, shared=None):
                             track_state[tid] = st
                             active.add(st["global_id"])
                         elif inside and now <= st.get("fresh_until", -1.0):
-                            hit = find_handoff_match(shared, order, emb, now, ttl, cross_thr, active,
+                            hit = find_handoff_match(shared, order, emb, now, ttl, cross_thr, active, partners,
                                                      below=st["global_id"])
                             if hit is not None and take_handoff(shared, hit[0]):
                                 old = st["global_id"]
-                                handoffs.pop("%d:%d" % (order, old), None)
+                                for other, _ in my_zones:
+                                    handoffs.pop(handoff_key(order, other, old), None)
                                 gallery.pop(old, None)
                                 gallery_seen.pop(old, None)
                                 active.discard(old)
@@ -608,13 +650,15 @@ def run(order, path, output, args, shared=None):
                             # While in the zone the candidate stays fresh (the other camera usually sees the
                             # person before this one loses them); once seen outside the zone it is withdrawn.
                             # After leaving or vanishing inside the zone it lives on for handoff_ttl seconds.
-                            key = "%d:%d" % (order, st["global_id"])
-                            if inside:
-                                handoffs[key] = {"global_id": st["global_id"], "camera": order,
-                                                 "embedding": st["embedding"].astype(np.float32), "last_seen": now}
-                            elif st.get("in_overlap"):
-                                handoffs.pop(key, None)
-                        st["in_overlap"], st["last_seen"] = inside, now
+                            # One candidate per partner camera whose shared zone the person is in.
+                            for other, _ in my_zones:
+                                key = handoff_key(order, other, st["global_id"])
+                                if other in partners:
+                                    handoffs[key] = {"global_id": st["global_id"], "camera": order, "to": other,
+                                                     "embedding": st["embedding"].astype(np.float32), "last_seen": now}
+                                elif other in st.get("in_overlap", ()):
+                                    handoffs.pop(key, None)
+                        st["in_overlap"], st["last_seen"] = partners, now
                     if zone is not None:
                         cleanup_handoffs(shared, order, now, ttl)
                 if writer is not None:
@@ -704,17 +748,24 @@ def main():
     jobs = [(i, path, os.path.join(out_dir, "%d_%s.json.gz" % (i, stamp)))
             for i, path in enumerate(args.input, 1)]
 
-    # Overlap handoff is for exactly two cameras; set it up before any model is loaded.
+    # Overlap handoff between camera pairs; set it up before any model is loaded. With exactly two inputs
+    # and no file yet the zones are drawn on the spot; more cameras need a "pairs" file (draw_zones.py).
     zones = None
-    if args.overlap_file and len(jobs) == 2:
-        zones = load_overlap_config(args.overlap_file)
-        if zones is None:
+    if args.overlap_file and len(jobs) >= 2:
+        zones = load_overlap_config(args.overlap_file, len(jobs))
+        if zones is None and len(jobs) == 2:
             log("%s not found -- draw the overlap zone on both cameras" % args.overlap_file)
             zones = setup_overlap_config(args.input, args.overlap_file)
             if zones is None:
                 log("overlap setup cancelled -- running without cross-camera handoff")
-    elif args.overlap_file and os.path.isfile(args.overlap_file):
-        log("overlap handoff needs exactly two inputs -- ignoring " + args.overlap_file)
+            else:
+                zones = normalize_overlap_config(zones, 2, args.overlap_file)
+        elif zones is None:
+            log("%s not found -- running without cross-camera handoff" % args.overlap_file)
+        if zones is not None:
+            log("overlap pairs: " + (", ".join("%d-%d" % tuple(p["cameras"]) for p in zones["pairs"]) or "none"))
+            if not zones["pairs"]:
+                zones = None
 
     # Fetch the weights once up front, so concurrent workers don't race to download them.
     from ultralytics import YOLO

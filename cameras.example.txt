@@ -1,3 +1,5 @@
 # Copy to cameras.txt and fill in. Default inputs for make_analysis.py / screenshot.py (one per line).
 rtsp://<user>:<password>@192.168.50.101/stream2
 rtsp://<user>:<password>@192.168.50.103/stream2
+rtsp://<user>:<password>@192.168.50.101/stream7
+rtsp://<user>:<password>@192.168.50.103/stream7
