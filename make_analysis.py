@@ -41,6 +41,8 @@ NOSE, L_EYE, R_EYE, L_EAR, R_EAR, L_SH, R_SH = 0, 1, 2, 3, 4, 5, 6
 REID_SIZE = (128, 384)       # SOLIDER input (w, h)
 REID_SEMANTIC = 0.2          # SOLIDER semantic weight used for its released ReID models
 MIN_CROP_W, MIN_CROP_H = 16, 32
+PROTOTYPE_RATE = 0.2         # EMA weight of each new ReID embedding in a track's prototype
+GALLERY_MATCH_RATE = 0.05    # the same, for a track that took its global_id from the gallery
 CAMERAS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cameras.txt")
 DEFAULT_HANDOFF_TTL = 5.0
 DEFAULT_CROSS_REID_THRESHOLD = 0.70   # handoff_mode "appearance" only
@@ -512,6 +514,9 @@ def run(order, path, output, args, shared=None):
     track_state = {}   # track_id -> {"global_id", "embedding" (EMA prototype), "in_overlap", "last_seen"}
     gallery = {}       # global_id -> prototype; kept after the track ends so re-entries can match
     gallery_seen = {}  # global_id -> last time seen; older than --id-keep and the id can't be reused
+    # A track that took a gallery id refreshes its prototype slowly: different people matched into one id
+    # otherwise pull the prototype toward an "average person" that then matches everyone (10-10: 22 ids
+    # for a whole day of 4 cameras).
     local_gid = [0]    # global_id counter when this is the only camera
     routes = {}        # track_id -> sightings summary for the "people" section (see update_route)
     zones = shared.get("zones") if shared else None
@@ -605,8 +610,8 @@ def run(order, path, output, args, shared=None):
                             # when this track is in the zone too) -- by position alone in "position" mode,
                             # otherwise only if they look more alike than anyone in this camera's gallery;
                             # 2) this camera's gallery (identities not on screen); 3) a new global_id
-                            # identities gone longer than --id-keep are forgotten: someone in similar
-                            # clothes hours later is a new visitor, not the same one back
+                            # identities gone longer than --id-keep (5 min) are forgotten: someone in
+                            # similar clothes later on is a new visitor, not the same one back
                             for gid in [g for g, t in gallery_seen.items() if now - t > args.id_keep]:
                                 gallery.pop(gid, None)
                                 gallery_seen.pop(gid, None)
@@ -622,7 +627,7 @@ def run(order, path, output, args, shared=None):
                                 # by position the other camera's partial view says little about this one
                                 st = {"global_id": hit[1], "embedding": emb if by_position else hit[2]}
                             elif best_sim >= args.reid_threshold:
-                                st = {"global_id": best_id, "embedding": gallery[best_id]}
+                                st = {"global_id": best_id, "embedding": gallery[best_id], "rate": GALLERY_MATCH_RATE}
                             else:
                                 # brand-new id: for handoff_ttl it may still yield to the other camera's
                                 # older id (both cameras can see a person appear in the zone at once)
@@ -643,7 +648,8 @@ def run(order, path, output, args, shared=None):
                                 active.add(hit[1])
                                 st["global_id"], st["fresh_until"] = hit[1], -1.0
                         # Established tracks keep their global_id; ReID only refreshes the prototype.
-                        st["embedding"] = l2(0.8 * st["embedding"] + 0.2 * emb)
+                        rate = st.get("rate", PROTOTYPE_RATE)
+                        st["embedding"] = l2((1 - rate) * st["embedding"] + rate * emb)
                         gallery[st["global_id"]] = st["embedding"]
                         gallery_seen[st["global_id"]] = now
                         if zone is not None:
@@ -711,9 +717,11 @@ def main():
                    help="stop cleanly at this time of day, e.g. 19:00 (for scheduled daily runs)")
     p.add_argument("--interval", type=int, default=5, help="write every Nth frame (tracking still runs on all)")
     p.add_argument("--reid-interval", type=int, default=5, help="run ReID on all visible people every Nth frame")
-    p.add_argument("--reid-threshold", type=float, default=0.6, help="min cosine similarity to reuse a global_id")
-    p.add_argument("--id-keep", type=float, default=3600,
-                   help="seconds a global_id stays reusable after it was last seen (default 1 h)")
+    p.add_argument("--reid-threshold", type=float, default=0.75,
+                   help="min cosine similarity to give a new track a global_id from the gallery")
+    p.add_argument("--id-keep", type=float, default=300,
+                   help="seconds a global_id can still be re-matched from the gallery after it was last seen "
+                        "(default 5 min)")
     p.add_argument("--reid-weights", default="solider_swin_small_msmt17.pth")
     p.add_argument("--reid-repo", default="SOLIDER-REID", help="clone of github.com/tinyvision/SOLIDER-REID")
     p.add_argument("--overlap-file", default="overlap_zones.json",

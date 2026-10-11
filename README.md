@@ -109,7 +109,8 @@ python make_analysis.py --save-video             # 분석 결과를 그린 mp4�
 | `--device` | `0` | GPU 번호 또는 `cpu` |
 | `--interval` | `5` | N프레임마다 기록(추적은 모든 프레임에서 수행) |
 | `--reid-interval` | `5` | N프레임마다 ReID 실행 |
-| `--reid-threshold` | `0.6` | 같은 사람으로 볼 최소 유사도 |
+| `--reid-threshold` | `0.75` | 사라졌던 사람을 같은 global_id로 다시 붙일 최소 유사도 |
+| `--id-keep` | `300` | 사라진 global_id를 다시 붙일 수 있는 시간(초). 지나면 새 방문자 |
 | `--save-video` | 끔 | 분석 결과를 그린 영상 저장 |
 | `--duration` | `0` | N초 후 자동 종료 (0 = 영상 끝 또는 Ctrl+C까지) |
 | `--until` | 없음 | 지정한 시각(`HH:MM`)에 자동 종료, 예: `--until 19:00` |
