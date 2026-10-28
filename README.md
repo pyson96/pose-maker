@@ -127,7 +127,7 @@ python record.py --until 19:00              # cameras.txt의 카메라 전부
 python record.py --input <주소> --duration 60
 ```
 
-- 저장 위치: `recordings/YYYY-MM-DD/<카메라번호>_YYMMDD_HHMMSS.mp4`. 10분(`--segment 600`)마다 키프레임에서 새 파일로 나눕니다.
+- 저장 위치: `recordings/YYYY-MM-DD/<카메라번호>_YYMMDD_HHMMSS.mp4`. 1시간(`--segment 3600`)마다 키프레임에서 새 파일로 나눕니다(카메라 4대, 하루 9시간이면 36개).
 - 조각난(fragmented) MP4라 PC가 갑자기 꺼져도 그 전까지의 영상은 남고, 브라우저에서 바로 재생됩니다. 소리는 저장하지 않습니다.
 - 보관: `--keep-days 14`보다 오래된 날짜 폴더는 자동으로 지웁니다. 디스크 여유가 `--min-free-gb 30` 아래로 내려가면 오늘을 뺀 가장 오래된 날짜부터 지웁니다.
 - 용량은 카메라 비트레이트에 따라 다르며, 카메라 4대 하루 9시간에 약 7~8 GB로 예상됩니다.

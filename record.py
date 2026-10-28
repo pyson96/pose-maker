@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Record the cameras' original streams to disk, without re-encoding (PyAV remux: a few % of one CPU core).
 
-    python record.py --until 19:00                   # cameras.txt -> recordings/YYYY-MM-DD/N_YYMMDD_HHMMSS.mp4
+    python record.py --until 19:00                   # cameras.txt -> recordings/YYYY-MM-DD/N_YYMMDD_HHMMSS.mp4, 1 h each
     python record.py --input rtsp://... --duration 60
 
 One thread per camera. Files are fragmented MP4 (video only), cut every --segment seconds at a keyframe,
@@ -126,7 +126,7 @@ def main():
     p.add_argument("--out-dir", default="recordings")
     p.add_argument("--until", help="stop at this wall-clock time, HH:MM")
     p.add_argument("--duration", type=float, default=0, help="stop after N seconds (0 = --until or forever)")
-    p.add_argument("--segment", type=float, default=600, help="seconds per file (cut at the next keyframe)")
+    p.add_argument("--segment", type=float, default=3600, help="seconds per file (cut at the next keyframe)")
     p.add_argument("--keep-days", type=int, default=14, help="day folders kept, today included")
     p.add_argument("--min-free-gb", type=float, default=30, help="delete the oldest days below this free space")
     args = p.parse_args()
