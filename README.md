@@ -66,6 +66,7 @@ scp solider_swin_small_msmt17.pth <user>@<host>:<pose-maker 경로>/
 pose-maker/
 ├── make_analysis.py
 ├── screenshot.py
+├── record.py
 ├── requirements.txt
 ├── bakery.html, office.html
 ├── cameras.txt
@@ -117,6 +118,22 @@ python make_analysis.py --save-video             # 분석 결과를 그린 mp4�
 
 전체 옵션은 `python make_analysis.py -h`로 확인하세요.
 
+### 원본 영상 저장 — `record.py`
+
+카메라 영상을 **다시 압축하지 않고 그대로** MP4로 저장합니다(PyAV로 스트림 복사). 카메라 4대를 저장해도 CPU는 1~2%, 메모리는 수백 MB 이하만 더 씁니다.
+
+```bash
+python record.py --until 19:00              # cameras.txt의 카메라 전부
+python record.py --input <주소> --duration 60
+```
+
+- 저장 위치: `recordings/YYYY-MM-DD/<카메라번호>_YYMMDD_HHMMSS.mp4`. 10분(`--segment 600`)마다 키프레임에서 새 파일로 나눕니다.
+- 조각난(fragmented) MP4라 PC가 갑자기 꺼져도 그 전까지의 영상은 남고, 브라우저에서 바로 재생됩니다. 소리는 저장하지 않습니다.
+- 보관: `--keep-days 14`보다 오래된 날짜 폴더는 자동으로 지웁니다. 디스크 여유가 `--min-free-gb 30` 아래로 내려가면 오늘을 뺀 가장 오래된 날짜부터 지웁니다.
+- 용량은 카메라 비트레이트에 따라 다르며, 카메라 4대 하루 9시간에 약 7~8 GB로 예상됩니다.
+- 분석과 녹화가 카메라에 따로 접속하므로 카메라당 RTSP 연결이 2개가 됩니다.
+- 로그의 카메라 주소에서 비밀번호는 `***`로 가립니다.
+
 ### 기본 카메라 주소 변경
 
 기본 카메라 주소는 `cameras.txt`에 한 줄에 하나씩 적습니다(`#`으로 시작하면 주석). `make_analysis.py`와 `screenshot.py`가 모두 이 파일을 씁니다. `--input`을 주지 않았는데 이 파일이 없으면 오류로 멈춥니다.
@@ -129,7 +146,7 @@ copy cameras.example.txt cameras.txt     # Linux: cp
 
 ### 매일 자동 실행 (10:00~19:00)
 
-`run_daily.bat`이 `make_analysis.py --until 19:00`을 실행하고, 로그를 날짜별 파일 `logs\analysis_YYMMDD.log`에 남깁니다. 로그의 모든 줄 앞에는 `[HH:MM:SS]` 시각이 붙습니다. 종료 시각을 바꾸려면 `run_daily.bat 18:30`처럼 인자로 줍니다. Windows 작업 스케줄러에 등록합니다.
+`run_daily.bat`이 `record.py --until 19:00`(원본 영상 저장, 백그라운드)과 `make_analysis.py --until 19:00`을 실행하고, 로그를 날짜별 파일 `logs\record_YYMMDD.log`, `logs\analysis_YYMMDD.log`에 남깁니다. 로그의 모든 줄 앞에는 `[HH:MM:SS]` 시각이 붙습니다. 종료 시각을 바꾸려면 `run_daily.bat 18:30`처럼 인자로 줍니다. Windows 작업 스케줄러에 등록합니다.
 
 ```bat
 schtasks /create /tn PoseMaker /tr "C:\Users\<user>\pose-maker\run_daily.bat" /sc daily /st 10:00 /et 19:15 /k

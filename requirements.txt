@@ -3,3 +3,4 @@
 #   pip install -r requirements.txt
 ultralytics>=8.4.0     # YOLO26 pose
 lapx>=0.5.2            # ByteTrack assignment
+av>=14                 # record.py: copies the camera streams to MP4 without re-encoding

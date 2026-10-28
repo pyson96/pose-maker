@@ -44,7 +44,7 @@
   #bar input[type=range]{flex:1;accent-color:var(--acc)}
   #bar select{flex:0 0 auto}
   #play{width:38px}
-  #tlabel{min-width:132px;text-align:center;color:var(--dim)}
+  #tlabel{min-width:150px;font-variant-numeric:tabular-nums;text-align:center;color:var(--dim)}
   #views{position:fixed;top:8px;left:8px;z-index:25;display:flex;gap:4px}
   #hud{position:fixed;left:8px;top:44px;z-index:20;color:var(--dim);background:rgba(16,19,24,.78);
     border:1px solid var(--line);border-radius:5px;padding:6px 9px;pointer-events:none;white-space:pre}
@@ -60,6 +60,11 @@
     font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--viz-ink)}
   body.stats #stats{display:block}
   body.stats #hud{display:none}
+  #liveCount{position:fixed;top:44px;left:calc(50% + 80px);transform:translateX(-50%);z-index:21;display:none;gap:8px;
+    font:13px/1.2 system-ui,-apple-system,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
+  body.stats #liveCount.on{display:flex}
+  #liveCount div{background:rgba(16,19,24,.85);border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:6px 12px;color:#c3c2b7}
+  #liveCount b{display:block;font-size:22px;color:#fff;margin-top:2px}
   #stats h2{margin:0 0 8px;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px}
   #stats h2 button{margin-left:auto;padding:2px 8px}
   #stats h4{margin:14px 0 2px;font-size:12px;font-weight:600;color:var(--viz-ink)}
@@ -86,6 +91,10 @@
   .gate input{width:100%;min-width:0;background:#1a1f26;color:var(--fg);border:1px solid var(--line);border-radius:4px;
     padding:3px 4px;font:inherit}
   .gate.head span{color:var(--dim);font-size:10px;text-align:center}
+  .gate.t5{grid-template-columns:42px repeat(5,1fr);gap:2px}
+  .gate.t5 b{font-size:11px;white-space:nowrap}
+  .gate.t5 input{padding:3px 2px;font-size:11px;text-align:center;-moz-appearance:textfield}
+  .gate.t5 input::-webkit-inner-spin-button,.gate.t5 input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
   #vizTip{position:fixed;z-index:60;pointer-events:none;display:none;background:#1a1a19;color:#fff;
     border:1px solid rgba(255,255,255,.12);border-radius:6px;padding:5px 8px;font:12px system-ui,sans-serif;white-space:pre}
 </style>
@@ -102,6 +111,7 @@
   <button id="statsBtn" title="날짜·시간대별 방문자, 체류 시간, 히트맵">통계</button>
 </div>
 <div id="hud"></div>
+<div id="liveCount"><div>전체 인원<b id="lcAll">0명</b></div><div>입장 인원<b id="lcIn">0명</b></div></div>
 <div id="stats">
   <h2>방문 통계 <button id="statsClose" title="닫기">✕</button></h2>
   <div class="filters">
@@ -130,7 +140,7 @@
   <div class="row"><label>실사 프레임</label><input type="range" id="photoMix" min="0" max="1" step="0.01" value="1"><span class="val" id="photoMixV"></span></div>
   <div class="row"><label>3D 공간</label><input type="range" id="envMix" min="0" max="1" step="0.01" value="0.35"><span class="val" id="envMixV"></span></div>
   <div class="row"><label>휨 정도</label><input type="range" id="bend" min="0" max="2" step="0.01" value="1"><span class="val" id="bendV"></span></div>
-  <div class="hint">1 = 카메라 원본(어안). 1보다 크면 양 끝이 더 휘고(2에서 모서리가 원형으로 잘림), 작으면 펴집니다(0 ≈ 직선). 좌우 끝 화각(137.6°)은 유지하고 실사·3D·인물을 함께 다시 투영하며, 원본 프레임 밖은 3D만 보입니다.</div>
+  <div class="hint">1 = 카메라 원본(어안). 1보다 크면 양 끝이 더 휘고(2에서 모서리가 원형으로 잘림), 작으면 펴집니다(0 ≈ 직선). 좌우 끝 화각(HFOV)은 유지하고 실사·3D·인물을 함께 다시 투영하며, 원본 프레임 밖은 3D만 보입니다.</div>
 
   <h3>표시</h3>
   <div class="chks">
@@ -141,6 +151,8 @@
     <label><input type="checkbox" id="optCover" checked>렌즈 커버리지</label>
     <label><input type="checkbox" id="optEdges" checked>윤곽선</label>
     <label><input type="checkbox" id="optRoof" checked>처마 지붕</label>
+    <label><input type="checkbox" id="optHanok" checked>기와 지붕</label>
+    <label><input type="checkbox" id="optDwell" checked>체류 시간</label>
     <label><input type="checkbox" id="optGates" checked>입구·출구</label>
   </div>
   <div class="row"><label>궤적 길이</label><input type="range" id="trailSec" min="2" max="120" step="1" value="20"><span class="val" id="trailSecV"></span></div>
@@ -149,6 +161,11 @@
   <div id="gateRows"></div>
   <div class="btns"><button id="gateReset">위치 초기화</button></div>
   <div class="hint">평면도 기준 m: X = 왼쪽 벽에서, Y = 앞벽에서. 바닥에 색 구역으로 표시되며 CCTV 시점에서도 보이니 실제 문과 맞춰 조정하세요. 값은 이 브라우저에 저장됩니다.</div>
+
+  <h3>테이블</h3>
+  <div id="tableRows"></div>
+  <div class="btns"><button id="tableReset">크기 초기화</button></div>
+  <div class="hint">m 단위. X = 왼쪽 벽에서 (앞면을 따라), 밖 = 건물 앞선에서 바깥쪽으로 (음수면 실내), 높이 = 윗면. 값은 이 브라우저에 저장됩니다.</div>
 
   <h3>인물 위치 추정</h3>
   <div class="row"><label>엉덩이 높이</label><input type="range" id="hipH" min="0.3" max="1.1" step="0.01" value="0.90"><span class="val" id="hipHV"></span></div>
@@ -179,6 +196,7 @@
   <select id="speed" title="재생 속도">
     <option value="0.5">0.5×</option><option value="1" selected>1×</option>
     <option value="2">2×</option><option value="4">4×</option><option value="8">8×</option>
+    <option value="16">16×</option><option value="32">32×</option><option value="60">60×</option><option value="120">120×</option>
   </select>
 </div>
 <div id="drop">분석 결과(.json.gz) 또는 영상 파일을 놓으세요</div>
@@ -225,7 +243,10 @@ const LENS = {
    which useRig() switches. The active rig is the one the CCTV view and the sliders show. */
 const CAMS = [
   { name:'CCTV 1', shot:'10-06 16:35 스크린샷', store:'home.cam1', def:{ x:3.92, y:1.57, z:-0.05, yaw:-3.77, pitch:-6.10, roll:3.05, hfov:137.6, vfov:73.0, model:'equisolid' } },
-  { name:'CCTV 2', shot:'10-06 16:35 스크린샷', store:'home.cam2', def:{ x:6.67, y:1.35, z:-0.57, yaw:38.30, pitch:-17.37, roll:0.80, hfov:137.6, vfov:73.0, model:'equisolid' } },
+  // CCTV 2: the 10-06 screenshot only shows room lines right of the near panel, so the left edge was a guess.
+  // Refitted to keep those lines in place and put the legs seen at the left edge on 10-10 (13:13:05 G22,
+  // 13:40:30 G6, 16:12:20 G15, 17:38 G18, 18:04 G10) where CCTV 1 has those people; the edge needs the wider field.
+  { name:'CCTV 2', shot:'10-06 16:35 스크린샷', store:'home.cam2.v2', def:{ x:6.99, y:1.35, z:-0.91, yaw:37.28, pitch:-19.94, roll:-2.19, hfov:163.3, vfov:85.4, model:'equisolid' } },
   // stream7 = the second lens of the same two devices (6 mm, HFOV 57.3, VFOV 31.7), looking out through the open front:
   // CCTV 3 at the exit (right) and outside, CCTV 4 at the entrance (left) and outside. Position and height = the device's.
   // Angles fitted to the doorway marked on each screenshot (cam_marks.json): the floor-wall line on the side wall
@@ -324,7 +345,13 @@ const OUT = {
   rails:[{ x:4.17, z0:-0.19, y:[0.78, 1.33] }],                       // fence to the facade column
   panel:[9.47, 9.55, 0, 1.7, 0.68, 1.84],                             // wooden board beside the exit
   tree:{ x:9.6, z:4.9 },
+  // between the posts, back-projected from CCTV 4 (white box) and CCTV 3 + CCTV 4 (dark table)
+  tables:[
+    { name:'상자', b:[1.88, 2.55, 0, 0.70, 0, 0.48], color:0xe9e9e6 },                // C1-C2
+    { name:'테이블', b:[4.35, 6.30, 0, 0.75, 0.05, 0.55], color:0x3c4148, legs:true },     // dark grey, C2-C3
+  ],
 };
+
 
 /* ============================== RENDERER ============================== */
 const renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -551,12 +578,17 @@ function timber(a, b, s, m){                                      // square timb
   t.quaternion.setFromUnitVectors(UP, d.normalize());
   return t;
 }
+// CCTV 3 hangs at about the tie beams' height, so they run across its whole picture: not drawn in that view
+const TIE_BEAMS = [], TIE_HIDDEN_RIG = 2;
+function showTieBeams(on){
+  for (const m of TIE_BEAMS) if (m.visible !== on){ m.visible = on; envDirty = true; }
+}
 function buildOutdoor(){
   const { posts, postZ:pz, postW, beamY:by } = OUT, h = postW/2;
   const wood = mat(0x9a7a52), dark = mat(0x6b5034);
   for (const [x, z] of posts){
     addBox([x - h, x + h, 0, by, z - h, z + h], wood);                            // post
-    addBox([x - 0.04, x + 0.04, by - 0.12, by, 0, z + 0.45], wood, false);       // tie beam, facade -> past the post
+    TIE_BEAMS.push(addBox([x - 0.04, x + 0.04, by - 0.12, by, 0, z + 0.45], wood, false));   // tie beam, facade -> past the post
     timber([x, by - 0.55, z - h], [x, by - 0.12, z - 0.5], 0.07, wood);         // braces
     timber([x, by - 0.55, z + h], [x, by - 0.12, z + 0.42], 0.07, wood);
   }
@@ -579,6 +611,77 @@ const ceilGroup = new THREE.Group(); envScene.add(ceilGroup);
 for (const grp of [envGroup, edgeGroup])
   for (const o of [...grp.children]) if (new THREE.Box3().setFromObject(o).min.y >= 2.4) ceilGroup.add(o);
 
+/* ---------- tiled hanok roof over the indoor space (free view only, toggle) ----------
+   A hip roof (four faces) over the room plus overhang: each face is swept from the eave ring (s = 0) to
+   the ridge (s = 1); the slope is gentle at the eaves and steep near the ridge, and the eave line rises
+   and swings out toward the corners like a hanok's. Translucent and not writing depth, so the people
+   (rendered after the room) show through it untinted. */
+const HANOK = { pad:0.6, eaveY:2.5, rise:1.9, lift:0.38, flare:0.22 };
+const hanokGroup = new THREE.Group(); envScene.add(hanokGroup);
+let showHanok = true;
+function tileTexture(){                            // convex tile rows running down the slope
+  const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+  const g = c.getContext('2d'), gr = g.createLinearGradient(0, 0, 64, 0);
+  gr.addColorStop(0, '#2c3038'); gr.addColorStop(0.5, '#6d7480'); gr.addColorStop(1, '#2c3038');
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+  g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(0, 60, 64, 4);    // tile overlap
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+}
+function buildHanok(){
+  const { pad, eaveY, rise, lift, flare } = HANOK;
+  const cx = RC.x, cz = RC.z, A = (ROOM.x1 - ROOM.x0)/2 + pad, B = (ROOM.z1 - ROOM.z0)/2 + pad;
+  const NS = 18, NU = 28, TILE = 0.28;
+  const yAt = s => eaveY + rise * Math.pow(s, 1.7);
+  // point on the face whose outward axis is `ax` ('x' or 'z') and sign `sg`; u in -1..1 runs along the face
+  const pt = (ax, sg, s, u) => {
+    const a = A - s * B, b = B * (1 - s), k = Math.pow(Math.abs(u), 3), e = Math.pow(1 - s, 1.5) * k;
+    const out = (ax === 'z' ? b : a) + flare * e, along = (ax === 'z' ? a : b) * u + Math.sign(u) * flare * e;   // corners swing out both ways
+    return ax === 'z' ? new V3(cx + along, yAt(s) + lift * e, cz + sg * out)
+                      : new V3(cx + sg * out, yAt(s) + lift * e, cz + along);
+  };
+  const pos = [], uv = [], idx = [];
+  for (const [ax, sg] of [['z', 1], ['z', -1], ['x', 1], ['x', -1]]){
+    const base = pos.length / 3;
+    for (let i = 0; i <= NS; i++){
+      const s = i / NS;
+      for (let j = 0; j <= NU; j++){
+        const u = j / NU * 2 - 1, p = pt(ax, sg, s, u);
+        pos.push(p.x, p.y, p.z);
+        uv.push((ax === 'z' ? p.x : p.z) / TILE, s * Math.hypot(B, rise) / TILE);
+      }
+    }
+    for (let i = 0; i < NS; i++) for (let j = 0; j < NU; j++){
+      const a = base + i * (NU + 1) + j, b = a + NU + 1;
+      idx.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx); geo.computeVertexNormals();
+  hanokGroup.add(new THREE.Mesh(geo, mat(0xffffff, { map:tileTexture(), transparent:true, opacity:0.32,
+    depthWrite:false, side:THREE.DoubleSide, roughness:0.6 })));
+  // ridges: the main ridge with upturned ends, four hip ridges down to the lifted corners, the eave line
+  const ridgeMat = mat(0xe4e1d8, { transparent:true, opacity:0.75, depthWrite:false });
+  const tube = (pts, r) => hanokGroup.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length * 4, r, 8), ridgeMat));
+  const R = A - B, top = yAt(1);
+  tube([new V3(cx - R - 0.35, top + 0.28, cz), new V3(cx - R, top + 0.06, cz), new V3(cx, top + 0.04, cz),
+        new V3(cx + R, top + 0.06, cz), new V3(cx + R + 0.35, top + 0.28, cz)], 0.09);
+  for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]){
+    const pts = [];
+    for (let i = 0; i <= 8; i++) pts.push(pt('z', sz, i / 8, sx));
+    pts.reverse(); tube(pts, 0.06);
+  }
+  for (const [ax, sg] of [['z', 1], ['z', -1], ['x', 1], ['x', -1]]){
+    const pts = [];
+    for (let j = 0; j <= 16; j++) pts.push(pt(ax, sg, 0, j / 8 - 1));
+    tube(pts, 0.035);
+  }
+}
+buildHanok();
+
 /* ---------- objects someone is walking through turn see-through (free/top views) ----------
    Positions come from the cameras alone, so a person can end up inside a block (a sketched plan,
    calibration error). Each solid item gets its own material; while a person's feet are within its
@@ -593,6 +696,34 @@ for (const m of envGroup.children){
   SOLIDS.push({ m, box, opacity:m.material.opacity, transparent:m.material.transparent, depthWrite:m.material.depthWrite, on:false });
 }
 const PASS_PAD = 0.05, PASS_JOINTS = [5, 6, 11, 12];
+
+/* ---------- tables: sizes editable in the panel (X along the front, "밖" = metres outside the front
+   line, negative = inside), saved in this browser ---------- */
+const TABLES = JSON.parse(JSON.stringify(OUT.tables));
+try { const sv = JSON.parse(localStorage.getItem('home.tables') || '[]'); sv.forEach((b, i) => { if (TABLES[i] && b && b.length === 6) TABLES[i].b = b; }); } catch (e) {}
+let tableMeshes = [];
+function buildTables(){
+  for (const m of tableMeshes){
+    envGroup.remove(m); m.geometry.dispose(); m.material.dispose();
+    if (m.userData.edge){ edgeGroup.remove(m.userData.edge); m.userData.edge.geometry.dispose(); }
+    const i = SOLIDS.findIndex(s => s.m === m); if (i >= 0) SOLIDS.splice(i, 1);
+  }
+  tableMeshes = [];
+  const box = (b, color, edges) => {
+    const m = addBox(b, mat(color, { roughness:0.6 }), edges); tableMeshes.push(m);
+    SOLIDS.push({ m, box:new THREE.Box3().setFromObject(m), opacity:1, transparent:false, depthWrite:true, on:false });
+  };
+  for (const t of TABLES){
+    const [x0, x1, , y1, z0, z1] = t.b;
+    if (x1 - x0 < 0.02 || z1 - z0 < 0.02 || y1 < 0.05) continue;
+    if (!t.legs){ box(t.b, t.color, true); continue; }
+    box([x0, x1, y1 - 0.04, y1, z0, z1], t.color, true);                                    // top
+    const lx = Math.min(0.05, (x1 - x0) / 4), lz = Math.min(0.05, (z1 - z0) / 4);
+    for (const x of [x0 + lx, x1 - lx]) for (const z of [z0 + lz, z1 - lz])
+      box([x - 0.025, x + 0.025, 0, y1 - 0.04, z - 0.025, z + 0.025], t.color, false);      // legs
+  }
+  envDirty = true;
+}
 function updatePassThrough(people){
   for (const s of SOLIDS){
     const b = s.box, hit = people.some(e =>
@@ -691,6 +822,7 @@ const pplRT = new THREE.WebGLCubeRenderTarget(1024, { type:THREE.HalfFloatType }
 const envCube = new THREE.CubeCamera(0.03, 60, envRT);
 const pplCube = new THREE.CubeCamera(0.03, 60, pplRT);
 let envDirty = true;
+buildTables();                                  // needs envDirty, so built here
 
 const loader = new THREE.TextureLoader();
 for (const r of CAMS){
@@ -905,8 +1037,9 @@ async function loadAnalysisUrl(url){
    An office camera rarely sees feet: desks hide them. The body is anchored on the floor
    through the ankles when they are visible and the box isn't cut by the frame edge;
    otherwise through the hips at seated height (or shoulders 0.55 m above that).
-   Joints are then placed on a vertical plane through that anchor, facing the camera. */
-const opts = { hipH:0.90, kpThr:0.30, skel:true, label:true, trail:true, gaze:true, trailSec:20 };
+   Joints are then placed on a vertical plane through that anchor, facing the camera, and slid along
+   their camera rays to a depth that matches which way the person faces (trackFacing, addDepth). */
+const opts = { hipH:0.90, kpThr:0.30, skel:true, label:true, trail:true, gaze:true, dwell:true, trailSec:20 };
 const hidden = new Set();
 
 /* ---------- where the feet are ----------
@@ -993,6 +1126,7 @@ function prepareRig(){                            // current rig: smoothed keypo
           if (Number.isFinite(xs[m])){ p.ks[j*3] = xs[m]; p.ks[j*3+1] = ys[m]; p.ks[j*3+2] = 1; }
         });
       }
+      trackFacing(s, foot, dt);
     }
   }
   anchorCache.length = 0;
@@ -1002,6 +1136,102 @@ function prepareRig(){                            // current rig: smoothed keypo
     anchorCache[i] = m;
   });
 }
+/* ---------- which way a person faces (gives the body its depth, see addDepth) ----------
+   In the person's plane (normal n toward the camera, L sideways) the shoulders look narrower the more
+   the body is turned: F.n = -(left - right shoulder).L / shoulder width (hips help at half weight).
+   That leaves turned-left vs turned-right open; the nose sitting ahead of the shoulder line, the head
+   direction and the walking direction decide it. Signs and directions are averaged over ~0.5 s. */
+const SH_W = 0.38, HIP_W = 0.20, FACE_SMOOTH_S = 0.5;
+function trackFacing(seg, foot, dt){
+  const W = analysis.videoW, H = analysis.videoH, plane = new THREE.Plane();
+  const raw = seg.map(([, p], m) => {
+    const g = foot.get(p); if (!g) return null;
+    const n = new V3().copy(basis.pos).sub(g); n.y = 0;
+    if (n.lengthSq() < 1e-9) return null;
+    n.normalize();
+    const L = new V3(-n.z, 0, n.x);
+    plane.setFromNormalAndCoplanarPoint(n, g);
+    const P = j => p.ks[j*3+2] ? hitPlane(p.ks[j*3], p.ks[j*3+1], W, H, plane, new V3()) : null;
+    const s5 = P(5), s6 = P(6), h11 = P(11), h12 = P(12);
+    let num = 0, den = 0;
+    if (s5 && s6){ num -= s5.clone().sub(s6).dot(L) / SH_W; den += 1; }
+    if (h11 && h12){ num -= 0.5 * h11.clone().sub(h12).dot(L) / HIP_W; den += 0.5; }
+    if (!den) return null;
+    const a = THREE.MathUtils.clamp(num / den, -1, 1);
+    let cue = 0;
+    const nose = P(0);
+    if (nose && s5 && s6) cue += 3 * nose.clone().sub(s5.clone().add(s6).multiplyScalar(0.5)).dot(L);
+    if (p.h){
+      const hp = hitPlane(p.h[0], p.h[1], W, H, plane, new V3());
+      const far = hp && hitY(p.h[0] + 40*p.h[2], p.h[1] + 40*p.h[3], W, H, hp.y, new V3());
+      if (far){ const d = far.sub(hp); d.y = 0; if (d.lengthSq() > 1e-8) cue += 0.8 * d.normalize().dot(L); }
+    }
+    const ga = seg[m - 1] && foot.get(seg[m - 1][1]), gb = seg[m + 1] && foot.get(seg[m + 1][1]);
+    if (ga && gb){
+      const v = gb.clone().sub(ga); v.y = 0;
+      const sp = v.length() / (2 * dt);
+      if (sp > 0.3) cue += v.normalize().dot(L);
+    }
+    return { n, L, a, cue };
+  });
+  const h = Math.max(1, Math.round(FACE_SMOOTH_S / dt));
+  const cues = movAvg(raw.map(r => r ? r.cue : NaN), h);
+  let sign = 1;
+  const F = raw.map((r, m) => {
+    if (!r) return null;
+    if (Math.abs(cues[m]) > 0.02) sign = Math.sign(cues[m]);
+    return r.n.clone().multiplyScalar(r.a).addScaledVector(r.L, sign * Math.sqrt(1 - r.a * r.a));
+  });
+  const fx = movAvg(F.map(f => f ? f.x : NaN), h), fz = movAvg(F.map(f => f ? f.z : NaN), h);
+  seg.forEach(([, p], m) => {
+    const v = new V3(fx[m], 0, fz[m]);
+    p.face = F[m] && Number.isFinite(fx[m]) && v.lengthSq() > 1e-6 ? v.normalize() : null;
+  });
+}
+
+/* ---------- depth: the joints leave the flat plane ----------
+   Every joint first lies on the camera-facing plane through the person. Each is then slid along its
+   own camera ray (so the CCTV picture is unchanged) to the depth w (+ = toward the camera) that the
+   facing F gives it: torso and head by the standing-adult template's sideways/forward offsets; each
+   limb bone by the length it lacks in the plane (a bone that looks shorter than 88 % of its length
+   points toward or away from the camera), knees and elbows to the front, shins back. Bone lengths are
+   scaled by the person's own torso (shoulders to hips, 0.49 m on the template), so a body placed a
+   little too near or far -- drawn too small or large -- doesn't read as foreshortened limbs. Legs only
+   tilt when hips, knees and ankles were all seen clearly and the box isn't cut by the frame bottom:
+   a cut-off or guessed foot makes a standing leg look short. Tilts stay under 80 % (arms) / 60 % (legs)
+   of the bone. */
+const FWD_T = [0.10, 0.08, 0.08, 0, 0];           // nose / eyes ahead of the ears
+const DEPTH_BONES = [[5, 7, 0.30, 1], [7, 9, 0.27, 1], [6, 8, 0.30, 1], [8, 10, 0.27, 1],
+                     [11, 13, 0.43, 1], [13, 15, 0.42, -1], [12, 14, 0.43, 1], [14, 16, 0.42, -1]];
+function addDepth(joints, known, n, F, legsSeen){
+  const R = new V3().crossVectors(UP, F), Rn = R.dot(n), Fn = F.dot(n), L = new V3(-n.z, 0, n.x);
+  let num = 0, den = 0;
+  joints.forEach((q, j) => { if (q && known[j]){ num += q.y * BODY_T[j][1]; den += BODY_T[j][1] ** 2; } });
+  let sc = THREE.MathUtils.clamp(den ? num / den : 1, 0.8, 1.15);
+  if ([5, 6, 11, 12].every(j => joints[j] && known[j])){
+    const torso = joints[5].clone().add(joints[6]).sub(joints[11]).sub(joints[12]).multiplyScalar(0.5).length();
+    sc = THREE.MathUtils.clamp(torso / 0.49, 0.6, 1.3);
+  }
+  const w = new Array(KP_N).fill(0);
+  for (const j of [0, 1, 2, 3, 4, 5, 6, 11, 12]) w[j] = sc * (BODY_T[j][0] * Rn + (FWD_T[j] || 0) * Fn);
+  const tilt = Math.sign(Fn || 1) * Math.min(1, Math.abs(Fn) * 1.5);
+  for (const [a, b, len, pref] of DEPTH_BONES){
+    if (!joints[a] || !joints[b]) continue;
+    const leg = a >= 11;
+    if (leg && !legsSeen){ w[b] = w[a]; continue; }
+    const d = joints[b].clone().sub(joints[a]), d2 = Math.hypot(d.dot(L), d.y), m = 0.88 * len * sc;
+    w[b] = w[a] + Math.min(d2 < m ? Math.sqrt(m * m - d2 * d2) : 0, (leg ? 0.6 : 0.8) * len * sc) * pref * tilt;
+  }
+  const dir = new V3();
+  joints.forEach((q, j) => {
+    if (!q || !w[j]) return;
+    dir.copy(q).sub(basis.pos).normalize();
+    const dn = dir.dot(n); if (dn > -0.2) return;  // ray nearly along the plane: leave it
+    q.addScaledVector(dir, w[j] / dn);
+    q.y = Math.max(0.02, q.y);
+  });
+}
+
 function anchorsAt(i){                           // current rig (useRig) -- poseCache/anchorCache are per rig
   if (!anchorCache.length) prepareRig();         // cleared whenever the camera or the thresholds change
   return anchorCache[i];
@@ -1037,6 +1267,8 @@ function poseAt(i){
       }
     }
     const inferred = completeBody(joints, anchor, n);
+    if (p.face) addDepth(joints, inferred.map(x => !x), n.normalize(), p.face,
+                         p.y2 < H - 3 && p.k && [11, 12, 13, 14, 15, 16].every(j => p.k[j*3+2] >= 0.5));
     res.set(p.key, { anchor, joints, inferred, head });
   }
   poseCache.set(i, res);
@@ -1146,11 +1378,18 @@ function getViz(vkey, key){                      // vkey = "<rig>:<key>": each c
   const gaze = new THREE.Mesh(new THREE.BufferGeometry(),
     new THREE.MeshBasicMaterial({ color:0xfbbf24, transparent:true, opacity:0.35, side:THREE.DoubleSide, depthWrite:false }));
   const label = makeLabel(key[0] === 'G' ? 'G' + key.slice(1) : 'T' + key.slice(1), col);
-  const trail = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color:col, transparent:true, opacity:0.8 }));
-  trail.frustumCulled = false;
+  // trail: a flat ribbon on the floor in the id colour over a wider dark edge, fading out toward its
+  // oldest end, with an arrowhead at the person's feet
+  const trail = new THREE.Group(), ribbon = (color, opacity, order) => {
+    const m = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color, opacity,
+      transparent:true, vertexColors:true, depthWrite:false, side:THREE.DoubleSide }));
+    m.frustumCulled = false; m.renderOrder = order; trail.add(m); return m;
+  };
+  trail.userData.edge = ribbon(0x05070a, 0.55, 2); trail.userData.fill = ribbon(col, 0.95, 3);
   g.add(bones, bonesG, joints, jointsG, headBall, ring, disc, gaze, label);
   peopleScene.add(g, trail);
-  v = { key, col, g, bones, bonesG, joints, jointsG, headBall, bodyMat, ghostMat, ring, disc, gaze, label, trail };
+  const dwell = makeLabel('', col); dwell.visible = false; g.add(dwell);
+  v = { key, col, g, bones, bonesG, joints, jointsG, headBall, bodyMat, ghostMat, ring, disc, gaze, label, trail, dwell, dwellText:'' };
   viz.set(vkey, v);
   return v;
 }
@@ -1235,8 +1474,55 @@ function mergePeople(all){
   return out;
 }
 
+const DWELL_COL = new THREE.Color(0x1baf7a);
+const inRoom = p => p.x >= ROOM.x0 && p.x <= ROOM.x1 && p.z >= ROOM.z0 && p.z <= ROOM.z1;   // on the tiled floor
+/* floor ribbon along pts (oldest first): width w, alpha 0.12 -> 1, arrowhead of length 3w at the end */
+function ribbonGeo(geo, pts, w){
+  const P = [pts[0]];
+  for (const p of pts) if (p.distanceTo(P[P.length - 1]) > 0.01) P.push(p);
+  if (P.length < 2) return false;
+  const pos = [], col = [], idx = [], n = P.length, y = P[0].y, nrm = (dx, dz) => { const l = Math.hypot(dx, dz) || 1; return [-dz / l, dx / l]; };
+  for (let i = 0; i < n; i++){
+    const a = P[Math.max(0, i - 1)], b = P[Math.min(n - 1, i + 1)], [nx, nz] = nrm(b.x - a.x, b.z - a.z);
+    const al = 0.12 + 0.88 * i / (n - 1);
+    pos.push(P[i].x + nx * w/2, y, P[i].z + nz * w/2, P[i].x - nx * w/2, y, P[i].z - nz * w/2);
+    col.push(1, 1, 1, al, 1, 1, 1, al);
+    if (i) idx.push(2*i - 2, 2*i - 1, 2*i, 2*i - 1, 2*i + 1, 2*i);
+  }
+  const e = P[n - 1], d = P[n - 2], [nx, nz] = nrm(e.x - d.x, e.z - d.z), tx = nz, tz = -nx;   // (tx, tz) = forward
+  const k = pos.length / 3, aw = w * 1.4, al = w * 3;
+  pos.push(e.x + nx * aw, y, e.z + nz * aw, e.x - nx * aw, y, e.z - nz * aw, e.x + tx * al, y, e.z + tz * al);
+  col.push(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1); idx.push(k, k + 1, k + 2);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+  geo.setIndex(idx); geo.computeBoundingSphere();
+  return true;
+}
+function setTrail(v, pts){
+  const { edge, fill } = v.trail.userData;
+  let ok = true;
+  for (const [m, w, y] of [[edge, 0.13, 0.02], [fill, 0.07, 0.024]]){
+    m.geometry.dispose(); m.geometry = new THREE.BufferGeometry();
+    ok = ribbonGeo(m.geometry, pts.map(p => new V3(p.x, y, p.z)), w) && ok;
+  }
+  v.trail.visible = ok;
+}
+function setLabelText(sp, text, col){             // redraw a makeLabel() sprite
+  const fresh = makeLabel(text, col);
+  sp.material.map.dispose(); sp.material.map = fresh.material.map; sp.material.needsUpdate = true;
+  fresh.material.dispose();
+}
 function renderPerson({ vkey, key, anchor, joints, guess, head:gz, trail }){
   const v = getViz(vkey, key); v.g.visible = true;
+  // standing on the indoor floor: time spent on it so far this visit above the head
+  const base = playBase(), T = base === null ? 0 : base / 1000 + play.t;
+  const inSec = opts.dwell && base !== null && inRoom(anchor) ? indoorSecAt(key, T) : null;
+  v.dwell.visible = inSec !== null;
+  if (inSec !== null){
+    const sec = Math.floor(inSec), text = sec >= 3600
+      ? `${Math.floor(sec / 3600)}:${pad2(Math.floor(sec % 3600 / 60))}:${pad2(sec % 60)}` : `${pad2(Math.floor(sec / 60))}:${pad2(sec % 60)}`;
+    if (text !== v.dwellText){ v.dwellText = text; setLabelText(v.dwell, text, DWELL_COL); }
+  }
   v.ring.position.set(anchor.x, 0.006, anchor.z); v.disc.position.set(anchor.x, 0.012, anchor.z);
 
   // solid = seen in this frame, ghost = inferred; a bone is solid only if both ends were seen
@@ -1274,6 +1560,8 @@ function renderPerson({ vkey, key, anchor, joints, guess, head:gz, trail }){
   v.label.visible = opts.label;
   v.label.scale.set(view === 'cctv' ? 0.42 : 0.7, view === 'cctv' ? 0.17 : 0.28, 1);
   v.label.position.set(anchor.x, top + 0.28, anchor.z);
+  v.dwell.scale.copy(v.label.scale);
+  v.dwell.position.set(anchor.x, top + 0.28 + v.label.scale.y * (opts.label ? 1.15 : 0), anchor.z);
 
   v.gaze.visible = false;
   if (opts.gaze && gz){
@@ -1285,7 +1573,7 @@ function renderPerson({ vkey, key, anchor, joints, guess, head:gz, trail }){
     v.gaze.geometry = new THREE.BufferGeometry(); v.gaze.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     v.gaze.geometry.setIndex(idx); v.gaze.visible = true;
   }
-  if (trail && trail.length > 1){ v.trail.geometry.dispose(); v.trail.geometry = new THREE.BufferGeometry().setFromPoints(trail); v.trail.visible = true; }
+  if (trail && trail.length > 1) setTrail(v, trail);
 }
 
 /* ============================== STATS ==============================
@@ -1320,7 +1608,7 @@ function summarizeForStats(rig, name){
     }
   });
   STATS.files.set(name, { cam:rig.idx, run:runKeyOf(name, A.startedAt), samples:Float64Array.from(out) });
-  STATS.visitors = null;
+  STATS.visitors = null; liveIdx = null;
   useRig(activeRig());
   if (STATS.open) renderStats();
 }
@@ -1337,20 +1625,75 @@ function buildVisitors(){
       if (c){ c[0] += s[i+2]; c[1] += s[i+3]; c[2]++; } else m.set(slot, [s[i+2], s[i+3], 1]);
     }
   }
-  const out = [], push = slots => {
+  const out = [], push = (slots, run, gid) => {
     const dwell = slots.length * SLOT_S;
     if (dwell < MIN_VISIT_S) return;
     const first = slots[0].t;
-    out.push({ first, date:dateOf(first), hour:new Date(first * 1000).getHours(), dwell, slots });
+    out.push({ first, date:dateOf(first), hour:new Date(first * 1000).getHours(), dwell, slots, run, gid });
   };
-  for (const m of byKey.values()){
+  for (const [key, m] of byKey){
+    const cut = key.lastIndexOf(':'), run = key.slice(0, cut), gid = +key.slice(cut + 1);
     const slots = [...m.entries()].sort((a, b) => a[0] - b[0])
       .map(([k, c]) => ({ t:k * SLOT_S, h:new Date(k * SLOT_S * 1000).getHours(), x:c[0] / c[2], z:c[1] / c[2] }));
     let s0 = 0;                                     // split the id's slots into visits at long gaps
     for (let i = 1; i <= slots.length; i++)
-      if (i === slots.length || slots[i].t - slots[i - 1].t > VISIT_GAP_S){ push(slots.slice(s0, i)); s0 = i; }
+      if (i === slots.length || slots[i].t - slots[i - 1].t > VISIT_GAP_S){ push(slots.slice(s0, i), run, gid); s0 = i; }
   }
   return out;
+}
+
+/* ---------- entries: a visit counts as an entry once its floor track crosses the entrance zone's front
+   edge (plan Y = y0, X within x0..x1) from outside to inside, between two slots at most ENTRY_GAP_S
+   apart. Only the first crossing counts; its moment is the entry time. Recomputed on every render, so
+   editing the entrance zone updates the numbers. */
+const ENTRY_GAP_S = 3, ENTRY_PAD_M = 0.3;
+// first moment after `after` the visit crosses gate g's front edge inward (outside -> inside) or outward
+function crossTime(v, g, inward, after = -Infinity){
+  const line = g.y0;
+  for (let i = 1; i < v.slots.length; i++){
+    const a = v.slots[i - 1], b = v.slots[i], ya = -a.z, yb = -b.z;
+    if (b.t <= after || b.t - a.t > ENTRY_GAP_S) continue;
+    if (inward ? !(ya < line && yb >= line) : !(ya >= line && yb < line)) continue;
+    const k = (line - ya) / (yb - ya), x = a.x + (b.x - a.x) * k;
+    if (x >= g.x0 - ENTRY_PAD_M && x <= g.x1 + ENTRY_PAD_M) return a.t + (b.t - a.t) * k;
+  }
+  return null;
+}
+const entryTime = v => crossTime(v, GATES.entrance, true);
+
+/* ---------- replay: who has entered by now. For the runs being played: every visit's first sighting
+   (the "전체 인원" counter), entries (crossing the entrance line), and per visit the slots spent on the
+   indoor floor -- a person on that floor shows the indoor time so far this visit (time outside under the
+   eave doesn't count). Rebuilt when files or the zones change (liveIdx = null). */
+let liveIdx = null;
+function getLiveIdx(){
+  if (liveIdx) return liveIdx;
+  const runs = new Set(CAMS.filter(r => r.analysis.loaded && r.analysis.startedAt !== null).map(r => runKeyOf(r.analysis.name, r.analysis.startedAt)));
+  if (!STATS.visitors) STATS.visitors = buildVisitors();
+  const vs = STATS.visitors.filter(v => runs.has(v.run)), byGid = new Map(), firsts = [], entries = [];
+  for (const v of vs){
+    firsts.push(v.first);
+    const inT = Float64Array.from(v.slots.filter(inRoom), s => s.t);
+    (byGid.get(v.gid) || byGid.set(v.gid, []).get(v.gid)).push({ first:v.first, last:v.slots[v.slots.length - 1].t + SLOT_S, inT });
+    const e = entryTime(v); if (e !== null) entries.push(e);
+  }
+  const asc = (a, b) => a - b;
+  return liveIdx = { byGid, firsts:firsts.sort(asc), entries:entries.sort(asc) };
+}
+const countUpTo = (a, t) => { let lo = 0, hi = a.length; while (lo < hi){ const m = (lo + hi) >> 1; if (a[m] <= t) lo = m + 1; else hi = m; } return lo; };
+function indoorSecAt(key, T){                     // -> seconds this id's current visit has spent indoors by wall time T
+  if (key[0] !== 'G') return null;
+  const list = getLiveIdx().byGid.get(+key.slice(1));
+  if (list) for (const r of list) if (T >= r.first - SLOT_S && T <= r.last + SLOT_S) return countUpTo(r.inT, T) * SLOT_S;
+  return null;
+}
+function updateLiveCount(){
+  const el = $('liveCount'), base = playBase();
+  el.classList.toggle('on', STATS.open && base !== null);
+  if (!STATS.open || base === null) return;
+  const T = base / 1000 + play.t, L = getLiveIdx();
+  $('lcAll').textContent = countUpTo(L.firsts, T).toLocaleString() + '명';
+  $('lcIn').textContent = countUpTo(L.entries, T).toLocaleString() + '명';
 }
 
 /* ---------- floor heatmaps: a canvas texture laid on the floor (also baked into the CCTV views) ---------- */
@@ -1361,8 +1704,9 @@ const heatMesh = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.x1 - ROOM.x0, ROOM.
   new THREE.MeshBasicMaterial({ map:heatTex, transparent:true, depthWrite:false }));
 heatMesh.rotation.x = -Math.PI/2; heatMesh.position.set(RC.x, 0.015, RC.z); heatMesh.renderOrder = 1; heatMesh.visible = false;
 envScene.add(heatMesh);
-// sequential blue ramp (reference palette steps 200 -> 700); zero stays transparent
-const HEAT_RAMP = ['#9ec5f4', '#5598e7', '#256abf', '#104281', '#0d366b'].map(h => new THREE.Color(h));
+// vivid turbo-style ramp (blue -> cyan -> green -> yellow -> orange -> red) so hot spots jump out on the floor;
+// zero stays transparent
+const HEAT_RAMP = ['#3b4cc0', '#1fa2ff', '#12d8a6', '#7ee82f', '#ffe11a', '#ff8a00', '#ff2d2d', '#c4007a'].map(h => new THREE.Color(h));
 function rampAt(v){
   const x = Math.min(0.9999, Math.max(0, v)) * (HEAT_RAMP.length - 1), i = Math.floor(x);
   return HEAT_RAMP[i].clone().lerp(HEAT_RAMP[i + 1], x - i);
@@ -1410,7 +1754,7 @@ function paintHeat(grid){                          // -> max value represented (
     if (!(g[i] > 0) || !top) continue;
     const v = Math.min(1, g[i] / top), col = rampAt(v);
     img.data[i*4] = col.r * 255; img.data[i*4+1] = col.g * 255; img.data[i*4+2] = col.b * 255;
-    img.data[i*4+3] = 255 * (0.25 + 0.6 * v);
+    img.data[i*4+3] = 255 * (0.5 + 0.45 * Math.sqrt(v));   // even faint cells read clearly
   }
   ctx.putImageData(img, 0, 0);
   heatTex.needsUpdate = true; envDirty = true;
@@ -1450,6 +1794,44 @@ function barChart(items, { fmt, picked, onPick }){
   });
   return box;
 }
+/* one-series line chart: 2 px line, 8 px markers with a surface ring, a crosshair + tooltip on hover;
+   clicking a point calls onPick(key, event) */
+function lineChart(items, { fmt, onPick }){
+  const W = 420, H = 120, L = 36, B = 18, T = 10, n = items.length;
+  const max = Math.max(1e-9, ...items.map(d => d.value));
+  const step = Math.pow(10, Math.floor(Math.log10(max))), nice = [1, 2, 2.5, 5, 10].map(m => m * step).find(m => m >= max) || max;
+  const y = v => T + (H - T - B) * (1 - v / nice), cw = (W - L) / n, cx = i => L + cw * (i + 0.5);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">`;
+  for (const g of [0, nice / 2, nice]) svg += `<line x1="${L}" x2="${W}" y1="${y(g)}" y2="${y(g)}" stroke="var(--viz-grid)"/><text x="${L - 4}" y="${y(g) + 3}" text-anchor="end">${fmt(g, true)}</text>`;
+  svg += `<line x1="${L}" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="var(--viz-axis)"/>`;
+  svg += `<line class="xh" x1="0" x2="0" y1="${T}" y2="${y(0)}" stroke="var(--viz-ink2)" stroke-dasharray="2 2" visibility="hidden"/>`;
+  svg += `<polyline points="${items.map((d, i) => cx(i) + ',' + y(d.value)).join(' ')}" fill="none" stroke="var(--viz-bar)" stroke-width="2" stroke-linejoin="round"/>`;
+  const every = Math.ceil(n / 12);
+  items.forEach((d, i) => {
+    svg += `<circle cx="${cx(i)}" cy="${y(d.value)}" r="4" fill="var(--viz-bar)" stroke="var(--viz-surface)" stroke-width="2"/>`;
+    if (i % every === 0) svg += `<text x="${cx(i)}" y="${H - 5}" text-anchor="middle">${d.label}</text>`;
+    svg += `<rect class="hit" data-i="${i}" x="${L + cw * i}" y="0" width="${cw}" height="${H - B}" fill="transparent" style="cursor:${onPick ? 'pointer' : 'default'}"/>`;
+  });
+  const box = document.createElement('div'); box.className = 'chart'; box.innerHTML = svg + '</svg>';
+  const xh = box.querySelector('.xh');
+  box.querySelectorAll('.hit').forEach(h => {
+    const i = +h.dataset.i, d = items[i];
+    h.addEventListener('mousemove', e => { xh.setAttribute('x1', cx(i)); xh.setAttribute('x2', cx(i)); xh.setAttribute('visibility', 'visible'); showTip(e, d.tip); });
+    h.addEventListener('mouseleave', () => { xh.setAttribute('visibility', 'hidden'); hideTip(); });
+    if (onPick) h.addEventListener('click', e => { hideTip(); onPick(d.key, e); });
+  });
+  return box;
+}
+// jump the replay to a wall-clock moment, if the loaded files cover it
+function seekToWall(ms, e){
+  const base = playBase();
+  if (base === null){ showTip(e, '재생할 분석 결과가 없습니다'); return; }
+  let t = (ms - base) / 1000;
+  if (t < 0 && t > -3600) t = 0;                 // the hour the recording started in
+  if (t < 0 || t > endTime()){ showTip(e, '불러온 분석 결과에 이 시간이 없습니다'); return; }
+  setTime(t);
+}
+
 function renderStats(){
   const body = $('statsBody');
   if (!STATS.visitors) STATS.visitors = buildVisitors();
@@ -1466,13 +1848,16 @@ function renderStats(){
     return;
   }
   const vs = all.filter(v => STATS.date === 'all' || v.date === STATS.date);
+  for (const v of vs){ v.entry = entryTime(v); v.entryHour = v.entry === null ? null : new Date(v.entry * 1000).getHours(); }
   const hourVs = STATS.hour === null ? vs : vs.filter(v => v.hour === STATS.hour);
+  const entries = vs.filter(v => v.entry !== null), hourEntries = STATS.hour === null ? entries : entries.filter(v => v.entryHour === STATS.hour);
   const avg = a => a.length ? a.reduce((s, v) => s + v.dwell, 0) / a.length : 0;
 
   const tiles = document.createElement('div'); tiles.className = 'tiles';
   const tile = (k, v, n) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="n">${n}</div></div>`;
   const scope = STATS.hour === null ? (STATS.date === 'all' ? '전체 기간' : STATS.date) : `${STATS.hour}시 입장`;
   tiles.innerHTML = tile('방문자', hourVs.length.toLocaleString() + '명', scope)
+    + tile('입장 인원', hourEntries.length.toLocaleString() + '명', '입장선을 넘은 사람')
     + tile('평균 체류', fmtDur(avg(hourVs)), '중앙값 ' + fmtDur((s => s.length ? s[s.length >> 1] : 0)(hourVs.map(v => v.dwell).sort((a, b) => a - b))))
     + tile('최장 체류', fmtDur(Math.max(0, ...hourVs.map(v => v.dwell))), STATS.date === 'all' && dates.length > 1 ? `일평균 ${Math.round(vs.length / dates.length)}명` : '');
   body.appendChild(tiles);
@@ -1481,10 +1866,16 @@ function renderStats(){
   const byHour = [];
   for (let h = h0; h <= h1; h++){
     const g = vs.filter(v => v.hour === h);
-    byHour.push({ key:h, label:String(h), n:g.length, avg:avg(g) });
+    byHour.push({ key:h, label:String(h), n:g.length, avg:avg(g), entries:entries.filter(v => v.entryHour === h).length });
   }
   const pick = h => { STATS.hour = STATS.hour === h ? null : h; renderStats(); };
   const head = (t, sub) => { const e = document.createElement('div'); e.innerHTML = `<h4>${t}</h4><p class="sub">${sub}</p>`; body.appendChild(e); };
+  const eg = GATES.entrance;
+  head('시간대별 입장 인원', `입구 앞변(X ${eg.x0.toFixed(1)}~${eg.x1.toFixed(1)} m)을 밖에서 안으로 넘은 시각 기준 · 점을 누르면 그 시각으로 재생 위치를 옮깁니다`);
+  const playDate = STATS.date !== 'all' ? STATS.date : dates.length === 1 ? dates[0] : playBase() !== null ? dateOf(playBase() / 1000) : dates[0];
+  body.appendChild(lineChart(byHour.map(d => ({ key:d.key, label:d.label, value:d.entries, tip:`${d.key}시 · 입장 ${d.entries}명 · 누르면 ${d.key}:00으로 이동` })),
+    { fmt:(v, axis) => axis ? Math.round(v) : v + '명',
+      onPick:(h, e) => seekToWall(new Date(`${playDate}T${pad2(h)}:00:00`).getTime(), e) }));
   head('시간대별 방문자', '처음 나타난 시각 기준 · 막대를 누르면 그 시간대만 봅니다');
   body.appendChild(barChart(byHour.map(d => ({ key:d.key, label:d.label, value:d.n, tip:`${d.key}시 · 방문자 ${d.n}명` })),
     { fmt:(v, axis) => axis ? Math.round(v) : v + '명', picked:STATS.hour, onPick:pick }));
@@ -1519,8 +1910,8 @@ function renderStats(){
   body.appendChild(tb);
   if (STATS.table){
     const t = document.createElement('table');
-    t.innerHTML = '<tr><th>시간대</th><th>방문자</th><th>평균 체류</th></tr>' +
-      byHour.map(d => `<tr><td>${d.key}시</td><td>${d.n}</td><td>${d.n ? fmtDur(d.avg) : '-'}</td></tr>`).join('');
+    t.innerHTML = '<tr><th>시간대</th><th>입장</th><th>방문자</th><th>평균 체류</th></tr>' +
+      byHour.map(d => `<tr><td>${d.key}시</td><td>${d.entries}</td><td>${d.n}</td><td>${d.n ? fmtDur(d.avg) : '-'}</td></tr>`).join('');
     body.appendChild(t);
   }
   $('statsTableToggle').onclick = e => { e.preventDefault(); STATS.table = !STATS.table; renderStats(); };
@@ -1579,13 +1970,39 @@ function renderGateRows(){
     const v = parseFloat(el.value); if (!Number.isFinite(v)) return;
     GATES[el.dataset.k][el.dataset.f] = v;
     try { localStorage.setItem('home.gates', JSON.stringify(GATES)); } catch (e) {}
-    buildGates();
+    buildGates(); liveIdx = null;
+    if (STATS.open) renderStats();
   });
 }
+// table editor: b = [x0, x1, y0, y1, z0, z1]; fields X start/end, outside start/end (z), height (y1)
+const TABLE_FIELDS = [['X 시작', 0], ['X 끝', 1], ['밖 시작', 4], ['밖 끝', 5], ['높이', 3]];
+function renderTableRows(){
+  const box = $('tableRows');
+  box.innerHTML = '<div class="gate t5 head"><span></span>' + TABLE_FIELDS.map(([l]) => `<span>${l}</span>`).join('') + '</div>';
+  TABLES.forEach((t, i) => {
+    const row = document.createElement('div'); row.className = 'gate t5';
+    row.innerHTML = `<b>${t.name}</b>` + TABLE_FIELDS.map(([, k]) => `<input type="number" step="0.05" data-i="${i}" data-k="${k}" value="${t.b[k].toFixed(2)}">`).join('');
+    box.appendChild(row);
+  });
+  box.querySelectorAll('input').forEach(el => el.oninput = () => {
+    const v = parseFloat(el.value); if (!Number.isFinite(v)) return;
+    TABLES[+el.dataset.i].b[+el.dataset.k] = v;
+    try { localStorage.setItem('home.tables', JSON.stringify(TABLES.map(t => t.b))); } catch (e) {}
+    buildTables();
+  });
+}
+$('tableReset').onclick = () => {
+  OUT.tables.forEach((t, i) => TABLES[i].b = t.b.slice());
+  try { localStorage.removeItem('home.tables'); } catch (e) {}
+  renderTableRows(); buildTables();
+};
+renderTableRows();
+
 $('gateReset').onclick = () => {
   for (const k in GATES) Object.assign(GATES[k], GATE_DEFAULT[k]);
   try { localStorage.removeItem('home.gates'); } catch (e) {}
-  renderGateRows(); buildGates();
+  renderGateRows(); buildGates(); liveIdx = null;
+  if (STATS.open) renderStats();
 };
 buildGates(); renderGateRows();
 
@@ -1596,6 +2013,13 @@ let videoReady = false, videoRig = null;         // one video at a time, shown b
 const vOff = () => videoRig ? videoRig.offset : 0;
 const endTime = () => totalDur() || (videoReady ? vid.duration + vOff() : 0);
 const fmt = s => { s = Math.max(0, s); const m = Math.floor(s/60); return String(m).padStart(2, '0') + ':' + (s - m*60).toFixed(1).padStart(4, '0'); };
+// play.t = 0 is the earliest started_at of the loaded files (syncOffsets); null without one
+function playBase(){
+  const t = CAMS.filter(r => r.analysis.loaded && r.analysis.startedAt !== null).map(r => r.analysis.startedAt);
+  return t.length ? Math.min(...t) : null;
+}
+const clock = ms => { const d = new Date(ms); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`; };
+const timeLabel = () => { const b = playBase(); return b === null ? fmt(play.t) + ' / ' + fmt(endTime()) : clock(b + play.t * 1000) + ' / ' + clock(b + endTime() * 1000); };
 function setTime(t){
   play.t = THREE.MathUtils.clamp(t, 0, endTime() || 0);
   if (videoReady && Math.abs(vid.currentTime + vOff() - play.t) > 0.05) vid.currentTime = Math.max(0, play.t - vOff());
@@ -1608,7 +2032,8 @@ function setPlaying(on){
 }
 $('play').onclick = () => setPlaying(!play.on);
 $('seek').oninput = e => setTime(+e.target.value);
-$('speed').onchange = e => { play.speed = +e.target.value; vid.playbackRate = play.speed; };
+// browsers play video at most 16x; with a video loaded the replay follows it, so it tops out there
+$('speed').onchange = e => { play.speed = +e.target.value; try { vid.playbackRate = Math.min(16, play.speed); } catch (err) {} };
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
   if (e.code === 'Space'){ e.preventDefault(); setPlaying(!play.on); }
@@ -1692,7 +2117,8 @@ chk('optSkel', v => opts.skel = v); chk('optLabel', v => opts.label = v);
 chk('optTrail', v => opts.trail = v); chk('optGaze', v => opts.gaze = v);
 chk('optCover', v => coverGroup.visible = v);
 chk('optEdges', v => { edgeGroup.visible = v; envDirty = true; });
-chk('optRoof', v => showRoof = v);
+chk('optRoof', v => showRoof = v); chk('optHanok', v => showHanok = v);
+chk('optDwell', v => opts.dwell = v);
 chk('optGates', v => { gateGroup.visible = v; envDirty = true; });
 
 $('openData').onclick = () => $('dataFile').click();
@@ -1749,7 +2175,8 @@ function loop(now){
     $('seek').value = play.t;
   }
   const shown = drawPeople(play.t);
-  $('tlabel').textContent = fmt(play.t) + ' / ' + fmt(endTime());
+  updateLiveCount();
+  $('tlabel').textContent = timeLabel();
   const wall = CAMS.map(r => r.analysis.startedAt).filter(x => x !== null);
   $('hud').textContent =
     `${activeRig().name} · C545D 2.53 mm · ${cam.model} · f ${lensU.F.value.toFixed(0)} px\n` +
@@ -1759,7 +2186,7 @@ function loop(now){
     (view === 'cctv' && activeRig() !== videoRig ? '\n배경: ' + activeRig().shot : '');
 
   if (view === 'cctv'){
-    ceilGroup.visible = true; roofGroup.visible = true;
+    ceilGroup.visible = true; roofGroup.visible = true; hanokGroup.visible = false; showTieBeams(rigIdx !== TIE_HIDDEN_RIG);
     if (envDirty){
       coverGroup.visible_ = coverGroup.visible; coverGroup.visible = false;
       envCube.position.copy(basis.pos); envCube.update(renderer, envScene);
@@ -1773,6 +2200,8 @@ function loop(now){
   } else {
     controls.update();
     ceilGroup.visible = false; roofGroup.visible = showRoof && orbitCam.position.y < 15;   // not in the top view
+    hanokGroup.visible = showHanok && orbitCam.position.y < 15;
+    showTieBeams(true);
     renderer.autoClear = false; renderer.clear();
     renderer.render(envScene, orbitCam);
     renderer.render(peopleScene, orbitCam);
