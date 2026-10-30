@@ -24,13 +24,14 @@ import av
 from make_analysis import default_inputs, log
 
 RECONNECT_SEC = 5.0
+MAX_MUX_ERRORS = 50          # consecutive packets the file refuses before a new file is started
 OPEN_OPTIONS = {"rtsp_transport": "tcp", "timeout": "10000000"}   # socket timeout in microseconds
 MP4_OPTIONS = {"movflags": "frag_keyframe+empty_moov+default_base_moof"}
 
 
-def safe(url):
-    """URL for the log, without the camera password."""
-    return re.sub(r"//[^/@]*@", "//***@", url)
+def safe(text):
+    """URL or error message for the log, without the camera password."""
+    return re.sub(r"//[^/@\s]*@", "//***@", str(text))
 
 
 def day_dirs(root):
@@ -68,14 +69,14 @@ def record_camera(idx, url, args, deadline):
         try:
             src = av.open(url, options=OPEN_OPTIONS)
         except Exception as e:                      # camera off, network down, too many clients ...
-            log(tag + "cannot open %s: %s -- retry in %.0f s" % (safe(url), e, RECONNECT_SEC))
+            log(tag + "cannot open %s: %s -- retry in %.0f s" % (safe(url), safe(e), RECONNECT_SEC))
             time.sleep(RECONNECT_SEC)
             continue
         vin = src.streams.video[0]
         log(tag + "%s: %s %dx%d" % (safe(url), vin.codec_context.name, vin.codec_context.width, vin.codec_context.height))
         out = vout = None
-        base = None
-        started = 0.0
+        base = last = None
+        started, errors, fixed = 0.0, 0, 0
         try:
             for pkt in src.demux(vin):
                 if pkt.dts is None or pkt.size == 0:
@@ -98,23 +99,40 @@ def record_camera(idx, url, args, deadline):
                         path = os.path.join(folder, "%s_%d.mp4" % (name, k))
                     out = av.open(path, "w", format="mp4", options=MP4_OPTIONS)
                     vout = out.add_stream_from_template(vin)
-                    base, started = pkt.dts, now
+                    base, last, started, errors = pkt.dts, None, now, 0
                 if out is None:                          # wait for the first keyframe
                     continue
-                pkt.dts -= base
-                pkt.pts = pkt.dts if pkt.pts is None else pkt.pts - base
-                if pkt.dts < 0:
+                # MP4 needs strictly rising decode times; the cameras repeat one now and then
+                # (parameter sets sent as their own packet with the keyframe's time): nudge by one tick
+                dts = pkt.dts - base
+                pts = dts if pkt.pts is None else pkt.pts - base
+                if dts < 0:
                     continue
+                if last is not None and dts <= last:
+                    dts, fixed = last + 1, fixed + 1
+                pkt.dts, pkt.pts = dts, max(pts, dts)
                 pkt.stream = vout
-                out.mux(pkt)
+                try:
+                    out.mux(pkt)
+                    last, errors = dts, 0
+                except av.error.FFmpegError as e:        # one bad packet: skip it, keep the file and the stream
+                    errors += 1
+                    if errors == 1:
+                        log(tag + "packet not written (%s)" % safe(e))
+                    if errors >= MAX_MUX_ERRORS:
+                        log(tag + "%d packets in a row not written -- starting a new file" % errors)
+                        out.close()
+                        out = None
             else:
                 log(tag + "stream ended -- reconnecting")
         except Exception as e:
-            log(tag + "stream lost (%s) -- reconnecting" % e)
+            log(tag + "stream lost (%s) -- reconnecting" % safe(e))
         finally:
             if out is not None:
                 out.close()
             src.close()
+            if fixed:
+                log(tag + "%d repeated timestamps nudged" % fixed)
         if time.time() < deadline:
             time.sleep(RECONNECT_SEC)
     log(tag + "stop time reached")
