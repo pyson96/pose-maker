@@ -7,7 +7,8 @@ SOLIDER-REID/
 *.pth
 *.gz
 *.log
-cameras.txt
+cameras*.txt
+!cameras.example.txt
 screen*.jpg
 results/
 recordings/

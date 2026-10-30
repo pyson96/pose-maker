@@ -67,6 +67,7 @@ pose-maker/
 ├── make_analysis.py
 ├── screenshot.py
 ├── record.py
+├── setup_relay.ps1
 ├── requirements.txt
 ├── bakery.html, office.html
 ├── cameras.txt
@@ -131,8 +132,29 @@ python record.py --input <주소> --duration 60
 - 조각난(fragmented) MP4라 PC가 갑자기 꺼져도 그 전까지의 영상은 남고, 브라우저에서 바로 재생됩니다. 소리는 저장하지 않습니다.
 - 보관: `--keep-days 14`보다 오래된 날짜 폴더는 자동으로 지웁니다. 디스크 여유가 `--min-free-gb 30` 아래로 내려가면 오늘을 뺀 가장 오래된 날짜부터 지웁니다.
 - 용량은 카메라 비트레이트에 따라 다르며, 카메라 4대 하루 9시간에 약 7~8 GB로 예상됩니다.
-- 분석과 녹화가 카메라에 따로 접속하므로 카메라당 RTSP 연결이 2개가 됩니다.
+- 녹화와 분석은 아래 중계 서버를 거쳐 카메라 연결 하나를 나눠 씁니다.
 - 로그의 카메라 주소에서 비밀번호는 `***`로 가립니다.
+
+### 카메라 중계 서버 (mediamtx)
+
+Tapo 카메라는 RTSP 동시 접속을 장치당 3개 정도만 받습니다. 분석(stream2·stream7)과 녹화(stream2·stream7)가 각자 접속하면 4개가 되어 하나가 거부되므로, 원격 PC 안에 중계 서버 [mediamtx](https://github.com/bluenviron/mediamtx)를 두고 **스트림마다 카메라 연결 하나**를 분석·녹화가 나눠 받습니다.
+
+```
+카메라 ─ 스트림당 1개 연결 ─> mediamtx (127.0.0.1:8554) ─┬─> make_analysis.py
+                                                       └─> record.py
+```
+
+설치(한 번):
+1. mediamtx Windows 압축 파일을 `C:\Users\<user>\mediamtx`에 풉니다.
+2. 카메라 주소를 `cameras.direct.txt`에 적습니다(형식은 `cameras.txt`와 같음, git 제외). 처음 한 번은 `cameras.txt`에 카메라 주소가 있으면 그대로 복사됩니다.
+3. 관리자 PowerShell에서 `powershell -ExecutionPolicy Bypass -File setup_relay.ps1`을 실행합니다.
+
+스크립트가 하는 일:
+- `mediamtx.yml` 생성: 카메라 주소마다 경로 하나(`101/stream2`처럼 주소 끝을 그대로 사용), TCP만, 원격 PC 안에서만(127.0.0.1) 접속 가능, 읽는 쪽이 있을 때만 카메라에 연결(밤에는 연결 없음), RTMP/HLS/WebRTC/SRT/MoQ 끔
+- 예약 작업 `PoseMakerRelay` 등록: 부팅 시 자동 시작, 죽으면 1분 뒤 재시작
+- `cameras.txt`를 중계 주소(`rtsp://127.0.0.1:8554/101/stream2` 등)로 바꿈. 분석·녹화·스크린샷 모두 이 파일을 씁니다.
+
+`cameras.txt`, `cameras.direct.txt` 등 `cameras*.txt`는 비밀번호가 들어 있어 git에서 제외됩니다(`cameras.example.txt`만 포함).
 
 ### 기본 카메라 주소 변경
 
